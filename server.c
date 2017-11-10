@@ -1,254 +1,98 @@
-#include <sys/socket.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <netinet/in.h>
-#include <memory.h>
-#include <poll.h>
 #include "server.h"
-#include <uuid/uuid.h>
-#include <zconf.h>
 
-#define SUCCESS_CODE 0
-#define MAX_CLIENTS 64
-static const uint16_t PORT = 3112;
-
-#define TRUE 1
-#define FALSE 0
-
-#define MSG_LEN 4
-#define UUID_LEN 16
-#define LEN_LEN 2
-#define CONF_LEN (MSG_LEN + UUID_LEN)
-#define READ_LEN (CONF_LEN + LEN_LEN)
-
-static char register_msg[] = "RGST";
+static char register_msg[] = "_NEW";
 static char more_msg[] = "MORE";
-static char success_msg[] = "SCSS";
+static char match_msg[] = "MTCH";
 static char ack_msg[] = "_ACK";
 
-static uint64_t DIAPASONE = 3000;
+static const uint16_t PORT = 3112;
 
-typedef enum {
-    UNKNOWN,
-    REGISTERED,
-    MORE,
-    SUCCESS,
-    TO_ACK,
-    SUCCESS_CONF,
-    SUCCESS_READ
-} client_state;
+int try_handle_unknown(poll_clients_t *poll_clients, int sock_num);
 
-typedef enum {
-    IN_PROGRESS, TO_DO
-} task_status;
-
-typedef struct client {
-    u_char buffer[128];
-    short bytes_read;
-    client_state state;
-} client_t;
-
-typedef struct task {
-    uuid_t uuid;
-    char begin[32];
-    char end[32];
-    task_status status;
-} task_t;
-
-int next(char *string,
-         const char *alphabet,
-         int alphabet_length,
-         const ushort *reverse_table
-);
-
-int next_string(
-        char *string,
-        ushort length,
-        int index,
-        const char *alphabet,
-        int alphabet_length,
-        const ushort *reverse_table
-);
-
-void fill_buffer(
-        u_char *buffer,
-        char *begin_task,
-        char *end_task,
-        const char *begin_string_suf,
-        const char *end_string_suf,
-        const char *current_string,
-        size_t length
-);
-
-
-void init_client(client_t *client, struct pollfd *client_poll, int socket_fd) {
-    client->state = UNKNOWN;
-    client->bytes_read = 0;
-    client_poll->fd = socket_fd;
-    client_poll->events = POLLIN;
-}
-
-void remove_socket(
-        nfds_t *number_of_sockets,
-        int number,
-        struct pollfd *socket_polls
-);
-
-void handle_to_ack(
-        struct pollfd *socket_polls,
-        const client_t *cur_client,
-        nfds_t *number_of_sockets,
-        int sock_num
-);
-
-void handle_unknown(
-        struct pollfd *socket_polls,
-        client_t *cur_client,
-        nfds_t *number_of_sockets,
-        int sock_num,
-        int *success,
-        int *success_num
-);
-
-void handle_registred(
-        task_t *tasks,
-        int *tasks_number,
-        const char *begin_string_suf,
-        const char *end_string_suf,
-        const char *alphabet,
-        ushort alphabet_length,
-        char *current_string,
-        const ushort *reverse_table,
+void try_handle_new(
         const struct pollfd *cur_poll,
-        client_t *cur_client
-);
-
-void handle_more(
-        const client_t *clients,
-        const task_t *tasks,
-        int tasks_number,
-        struct pollfd *socket_polls,
-        nfds_t *number_of_sockets,
-        const char *begin_string_suf,
-        const char *end_string_suf,
-        const char *alphabet,
-        ushort alphabet_length,
-        char *current_string,
-        const ushort *reverse_table,
-        int sock_num,
-        struct pollfd *cur_poll,
-        client_t *cur_client
-);
-
-void handle_success(
-        const client_t *clients,
-        const task_t *tasks,
-        int tasks_number,
-        struct pollfd *socket_polls,
-        nfds_t *number_of_sockets,
-        int sock_num,
-        struct pollfd *cur_poll,
-        client_t *cur_client
+        client_t *cur_client,
+        task_list_t *tasks,
+        string_gen_t *str_gen
 );
 
 int run_server() {
-    int server_socket_fd = socket(AF_INET, SOCK_STREAM, 0);
+    int server_socket_fd = server_socket(PORT);
+
     if (server_socket_fd < 0) {
-        perror("Failed to open socket.");
-        exit(1);
+        fprintf(stderr, "Error on socket creation. %s\n", strerror(server_socket_fd));
+        exit(EXIT_FAILURE);
     }
 
-    struct sockaddr_in server_address;
 
-    socklen_t address_size = sizeof(struct sockaddr_in);
-    memset(&server_address, 0, address_size);
+    tasks_srt_t tasks_srt_gen;
 
-    server_address.sin_family = AF_INET;
-    server_address.sin_addr.s_addr = htonl(INADDR_ANY);
-    server_address.sin_port = htons(PORT);
-
-    const struct sockaddr *address = (struct sockaddr *) &server_address;
-    int result_code = bind(server_socket_fd, address, address_size);
-    if (result_code != SUCCESS_CODE) {
-        perror("Failed to bind socket.");
-        exit(1);
-    }
-
-    result_code = listen(server_socket_fd, 32);
-    if (result_code != SUCCESS_CODE) {
-        perror("Failed to make socket listening");
-        exit(1);
-    }
-
-    client_t clients[MAX_CLIENTS];
-    task_t tasks[MAX_CLIENTS];
-    int tasks_number = 0;
+    task_list_t *tasks_list = &tasks_srt_gen.tasks;
+    tasks_list->tasks = malloc(sizeof(task_t) * MAX_CLIENTS);
+    tasks_list->amount = 0;
 
     struct pollfd socket_polls[MAX_CLIENTS + 1];
     socket_polls[0].fd = server_socket_fd;
     socket_polls[0].events = POLLIN;
 
-    nfds_t number_of_sockets = 1;
+    poll_clients_t poll_clients;
 
-    char *begin_string_suf = "AAAAAA";
-    char *end_string_suf = "TTTTTT";
+    init_poll_clients(&poll_clients, socket_polls);
 
+    string_gen_t str_gen;
 
-    char alphabet[] = "ACGT";
-    ushort alphabet_length = (ushort) strlen(alphabet);
-    char current_string[32] = "A";
-
-    ushort reverse_table[256];
-
-    for (ushort i = 0; i < alphabet_length; ++i) {
-        reverse_table[(u_char) alphabet[i]] = i;
+    if (init_string_gen(&str_gen) == FAILURE_CODE) {
+        exit(1);
     }
 
     int success = FALSE;
-    int success_num = 0;
-
+    int success_num = -1;
 
     ushort success_len = 0;
 
     while (1) {
-        int events = poll(socket_polls, number_of_sockets, -1);
+        int events = poll(socket_polls, poll_clients.amount + 1, TIMEOUT);
 
-        if (success && (socket_polls[success_num].revents == POLLIN)) {
-            client_t successor = clients[success_num];
-            if ((successor.state == SUCCESS) && (successor.bytes_read >= CONF_LEN)) {
-                int uuid_num = 0;
-                for (; uuid_num < tasks_number; ++uuid_num) {
-                    if (memcmp(
-                            tasks[uuid_num].uuid,
-                            &clients[uuid_num].buffer[MSG_LEN],
-                            UUID_LEN
-                    ) == 0) {
-                        break;
-                    }
-                }
-                if (uuid_num == tasks_number) {
-                    success = FALSE;
-                    remove_socket(&number_of_sockets, success_num, socket_polls);
-                } else {
-                    successor.state = SUCCESS_CONF;
-                }
+        for (int i = 0; i < tasks_list->amount; ++i) {
+            if ((time(NULL) - tasks_list->tasks[i].timestamp) > TIME_TO_DO) {
+                tasks_list->tasks[i].status = TO_DO;
             }
-            if ((successor.state == SUCCESS_CONF) && (successor.bytes_read >= READ_LEN)) {
-                u_char *buffer = successor.buffer;
-                uint16_t s_len = (((uint16_t) buffer[CONF_LEN]) << 8) + buffer[CONF_LEN + 1];
-                success_len = ntohs(s_len);
-                successor.state = SUCCESS_READ;
+        }
+
+        if (success && (poll_clients.polls[success_num].revents == POLLIN)) {
+            client_t *successor = &(poll_clients.clients[success_num]);
+            struct pollfd *success_poll = &(poll_clients.polls[success_num]);
+
+            ssize_t read = recv(success_poll->fd, successor->buffer, CLIENT_BUF_SIZE, 0);
+
+            if (read < 0) {
+                remove_client(success_num, &poll_clients);
+                success = FALSE;
+                success_num = -1;
+                continue;
+            }
+
+            if ((success_len < 1) && successor->bytes_read >= READ_LEN) {
+                u_char *buffer = successor->buffer;
+                memcpy(&success_len, &buffer[CONF_LEN], 2);
+                success_len = ntohs(success_len);
             }
 
             int all_read = READ_LEN + success_len;
-            if ((successor.state == SUCCESS_READ) && (successor.bytes_read >= all_read)) {
-                successor.buffer[all_read] = 0;
-                printf("%s\n", &successor.buffer[READ_LEN]);
+            if (successor->bytes_read >= all_read) {
+                successor->buffer[all_read] = '\0';
+                printf("%s\n", &(successor->buffer[READ_LEN]));
                 exit(0);
             }
         }
 
-        for (int sock_num = 0; sock_num < number_of_sockets && events > 0; ++sock_num) {
+        if (socket_polls[0].revents == POLLIN) {
+            --events;
+            int client_fd = accept(server_socket_fd, NULL, NULL);
+            add_client(&poll_clients, client_fd);
+        }
+
+        for (int sock_num = 0; sock_num < poll_clients.amount && events > 0; ++sock_num) {
             struct pollfd *cur_poll = &socket_polls[sock_num];
             if (cur_poll->events == 0) {
                 continue;
@@ -256,26 +100,16 @@ int run_server() {
 
             --events;
             if (cur_poll->events != POLLIN) {
-                remove_socket(&number_of_sockets, sock_num, socket_polls);
+                remove_client(sock_num, &poll_clients);
                 continue;
             }
 
-            if (sock_num == 0) {
-                int client_fd = accept(server_socket_fd, NULL, NULL);
-                init_client(
-                        &clients[number_of_sockets],
-                        &socket_polls[number_of_sockets],
-                        client_fd
-                );
-                ++number_of_sockets;
-                continue;
-            }
+            client_t *cur_client = &(poll_clients.clients[sock_num]);
 
-            client_t *cur_client = &clients[sock_num];
+            ssize_t read = recv(cur_poll->fd, cur_client->buffer, CLIENT_BUF_SIZE, 0);
 
-            ssize_t read = recv(cur_poll->fd, cur_client->buffer, CONF_LEN, 0);
             if (read < 0) {
-                remove_socket(&number_of_sockets, sock_num, socket_polls);
+                remove_client(sock_num, &poll_clients);
                 continue;
             }
 
@@ -283,71 +117,35 @@ int run_server() {
 
             switch (cur_client->state) {
                 case UNKNOWN: {
-                    handle_unknown(
-                            socket_polls,
-                            cur_client,
-                            &number_of_sockets,
-                            sock_num,
-                            &success,
-                            &success_num
-                    );
+                    try_handle_unknown(&poll_clients, sock_num);
                 }
-                case REGISTERED: {
-                    handle_registred(
-                            tasks,
-                            &tasks_number,
-                            begin_string_suf,
-                            end_string_suf,
-                            alphabet,
-                            alphabet_length,
-                            current_string,
-                            reverse_table,
-                            cur_poll,
-                            cur_client
-                    );
+                case NEW: {
+                    try_handle_new(cur_poll, cur_client, tasks_list, &str_gen);
                 }
                     break;
                 case MORE: {
-                    handle_more(
-                            clients,
-                            tasks,
-                            tasks_number,
-                            socket_polls,
-                            &number_of_sockets,
-                            begin_string_suf,
-                            end_string_suf,
-                            alphabet,
-                            alphabet_length,
-                            current_string,
-                            reverse_table,
-                            sock_num,
-                            cur_poll,
-                            cur_client
-
-                    );
+                    if (cur_client->bytes_read >= CONF_LEN)
+                        handle_more(tasks_list, cur_poll->fd, cur_client);
                 }
                     break;
                 case SUCCESS: {
-                    handle_success(
-                            clients,
-                            tasks,
-                            tasks_number,
-                            socket_polls,
-                            &number_of_sockets,
-                            sock_num,
-                            cur_poll,
-                            cur_client
-                    );
+                    if ((cur_client->bytes_read >= CONF_LEN)) {
+                        int result = handle_success(tasks_list, cur_client);
+                        if (result == FAILURE_CODE) {
+                            remove_client(sock_num, &poll_clients);
+                            success = FALSE;
+                            success_num = 0;
+                        } else {
+                            success = TRUE;
+                            success_num = sock_num;
+                        }
+                    }
                 }
                     break;
                 case TO_ACK: {
-                    handle_to_ack(socket_polls, clients, &number_of_sockets, sock_num);
-                }
-                    break;
-                case SUCCESS_CONF: {
-                }
-                    break;
-                case SUCCESS_READ: {
+                    if (cur_client->bytes_read >= MSG_LEN) {
+                        handle_to_ack(cur_client->buffer);
+                    }
                 }
                     break;
             }
@@ -355,270 +153,297 @@ int run_server() {
     }
 }
 
-void handle_success(
-        const client_t *clients,
-        const task_t *tasks,
-        int tasks_number,
-        struct pollfd *socket_polls,
-        nfds_t *number_of_sockets,
-        int sock_num,
-        struct pollfd *cur_poll,
-        client_t *cur_client
-) {
-    if ((cur_client->bytes_read < CONF_LEN)) {
-        return;
-    }
-
-    int j = 0;
-    for (; j < tasks_number; ++j) {
-        if (memcmp(tasks[j].uuid, &clients[j].buffer[MSG_LEN], UUID_LEN) == 0) {
-            break;
-        }
-    }
-    if (j == tasks_number) {
-        fprintf(stderr, "Unknown message type");
-        remove_socket(number_of_sockets, sock_num, socket_polls);
-    } else {
-        cur_client->state = SUCCESS_CONF;
-    }
-}
-
-void handle_more(
-        const client_t *clients,
-        const task_t *tasks,
-        int tasks_number,
-        struct pollfd *socket_polls,
-        nfds_t *number_of_sockets,
-        const char *begin_string_suf,
-        const char *end_string_suf,
-        const char *alphabet,
-        ushort alphabet_length,
-        char *current_string,
-        const ushort *reverse_table,
-        int sock_num,
-        struct pollfd *cur_poll,
-        client_t *cur_client
-) {
-    if ((cur_client->bytes_read < CONF_LEN)) {
-        return;
-    }
-
-    int j = 0;
-    for (; j < tasks_number; ++j) {
-        if (memcmp(tasks[j].uuid, &clients[j].buffer[MSG_LEN], UUID_LEN) == 0) {
-            break;
-        }
-    }
-
-    if (j == tasks_number) {
-        fprintf(stderr, "Unknown message type");
-        remove_socket(number_of_sockets, sock_num, socket_polls);
-        return;
-    }
-
-    next(current_string, alphabet, alphabet_length, reverse_table);
-
-    size_t length = strlen(current_string);
-    fill_buffer(
-            cur_client->buffer,
-            tasks[tasks_number].begin,
-            tasks[tasks_number].end,
-            begin_string_suf,
-            end_string_suf,
-            current_string,
-            length
-    );
-    send(cur_poll->fd, cur_client->buffer, 2 * length + 12, 0);
-    cur_client->state = TO_ACK;
-    cur_client->bytes_read = 0;
-}
-
-void handle_registred(
-        task_t *tasks,
-        int *tasks_number,
-        const char *begin_string_suf,
-        const char *end_string_suf,
-        const char *alphabet,
-        ushort alphabet_length,
-        char *current_string,
-        const ushort *reverse_table,
+void try_handle_new(
         const struct pollfd *cur_poll,
-        client_t *cur_client
+        client_t *cur_client,
+        task_list_t *tasks,
+        string_gen_t *str_gen
 ) {
-    if ((cur_client->bytes_read < CONF_LEN)) {
+
+    if (cur_client->bytes_read < CONF_LEN) {
         return;
     }
 
-    const int t_number = *tasks_number;
+    handle_new(tasks, cur_poll->fd, cur_client);
+}
 
-    memcpy(tasks[t_number].uuid, &(cur_client->buffer[MSG_LEN]), UUID_LEN);
-    next(current_string, alphabet, alphabet_length, reverse_table);
-    size_t length = strlen(current_string);
+int try_handle_unknown(poll_clients_t *poll_clients, int sock_num) {
+    client_t *cur_client = &(poll_clients->clients[sock_num]);
+    if (cur_client->bytes_read < MSG_LEN) {
+        return FAILURE_CODE;
+    }
 
-    fill_buffer(
-            cur_client->buffer,
-            tasks[t_number].begin,
-            tasks[t_number].end,
-            begin_string_suf,
-            end_string_suf,
-            current_string,
-            length
-    );
-    tasks[t_number].status = IN_PROGRESS;
+    client_state state = get_status(cur_client->buffer);
 
-    ++(*tasks_number);
+    if (state == UNKNOWN) {
+        remove_client(sock_num, poll_clients);
+        return FAILURE_CODE;
+    }
 
-    send(cur_poll->fd, cur_client->buffer, 2 * length + 12, 0);
+    cur_client->state = state;
+    return SUCCESS_CODE;
+}
+
+void init_poll_clients(poll_clients_t *poll_clients, struct pollfd *socket_polls) {
+    poll_clients->clients = malloc(sizeof(client_t) * MAX_CLIENTS);
+    poll_clients->polls = &socket_polls[1];
+}
+
+int server_socket(uint16_t port) {
+    int socket_fd = socket(AF_INET, SOCK_STREAM, 0);
+
+    if (socket_fd < 0) {
+        perror("Failed to open socket.");
+    }
+
+    struct sockaddr_in address;
+    socklen_t address_size = sizeof(struct sockaddr_in);
+
+    memset(&address, 0, address_size);
+
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_ANY);
+    address.sin_port = htons(port);
+
+    int result_code = bind(socket_fd, (struct sockaddr *) &address, address_size);
+    if (result_code != SUCCESS_CODE) {
+        return result_code;
+    }
+
+    result_code = listen(socket_fd, 32);
+    if (result_code != SUCCESS_CODE) {
+        return result_code;
+    }
+
+    return socket_fd;
+}
+
+int init_string_gen(string_gen_t *str_gen) {
+    str_gen->reverse_table = malloc(sizeof(ushort) * 256);
+    str_gen->current_string = malloc(sizeof(char) * 32);
+
+    if (str_gen->reverse_table == NULL || str_gen->current_string == NULL) {
+        return FAILURE_CODE;
+    }
+
+    str_gen->begin_string_suf = "AAAAAA";
+    str_gen->end_string_suf = "TTTTTT";
+    str_gen->alphabet = "ACGT";
+
+    str_gen->alphabet_length = (ushort) strlen(str_gen->alphabet);
+
+    for (ushort i = 0; i < (*str_gen).alphabet_length; ++i) {
+        str_gen->reverse_table[(u_char) str_gen->alphabet[i]] = i;
+    }
+
+    return SUCCESS_CODE;
+}
+
+int handle_success(const task_list_t *tasks, client_t *cur_client) {
+    if (check_uuid(tasks, cur_client) == FAILURE_CODE) {
+        return FAILURE_CODE;
+    }
+
+    return SUCCESS_CODE;
+}
+
+int check_uuid(const task_list_t *tasks, client_t *client) {
+    u_char *client_uuid = &(client->buffer[MSG_LEN]);
+
+    for (int uuid_num = 0; uuid_num < tasks->amount; ++uuid_num) {
+        if (memcmp(tasks->tasks[uuid_num].uuid, client_uuid, UUID_LEN) == 0) {
+            return uuid_num;
+        }
+    }
+    return FAILURE_CODE;
+}
+
+
+int handle_more(tasks_srt_t *tasks_str, int socket_fd, client_t *cur_client) {
+    int task_num = check_uuid(&tasks_str->tasks, cur_client);
+    if (task_num == FAILURE_CODE) {
+        return FAILURE_CODE;
+    }
+
+    task_t *task = getTask(tasks_str, cur_client->buffer, &tasks_str->str_gen);
+    size_t msg_size = fill_buffer(cur_client->buffer, task);
+
+    return send_work(msg_size, socket_fd, cur_client);
+
+}
+
+int send_work(size_t msg_size, int socket_fd, client_t *cur_client) {
+    if (send(socket_fd, cur_client->buffer, msg_size, 0) < msg_size) {
+        return FAILURE_CODE;
+    }
     cur_client->state = TO_ACK;
     cur_client->bytes_read = 0;
+
+    return SUCCESS_CODE;
 }
 
-void handle_unknown(
-        struct pollfd *socket_polls,
-        client_t *cur_client,
-        nfds_t *number_of_sockets,
-        int sock_num,
-        int *success,
-        int *success_num
-) {
-    if (cur_client->bytes_read < MSG_LEN) {
-        return;
-    }
+int handle_new(tasks_srt_t *tasks_str, int socket_fd, client_t *cur_client) {
 
-    if (memcpy(cur_client->buffer, register_msg, MSG_LEN) == 0) {
-        cur_client->state = REGISTERED;
-        return;
-    }
+    task_t *task = getTask(&(tasks_str->tasks), cur_client->buffer, &(tasks_str->str_gen));
+    size_t msg_size = fill_buffer(cur_client->buffer, task);
 
-    if (memcmp(cur_client->buffer, more_msg, MSG_LEN) == 0) {
-        cur_client->state = MORE;
-        return;
-    }
-
-    if (memcmp(cur_client->buffer, success_msg, MSG_LEN) == 0) {
-        cur_client->state = SUCCESS;
-        (*success) = TRUE;
-        (*success_num) = sock_num;
-        return;
-    }
-
-    fprintf(stderr, "Unknown message type");
-    remove_socket(number_of_sockets, sock_num, socket_polls);
+    return send_work(msg_size, socket_fd, cur_client);
 }
 
-void handle_to_ack(
-        struct pollfd *socket_polls,
-        const client_t *cur_client,
-        nfds_t *number_of_sockets,
-        int sock_num
-) {
-    if (cur_client->bytes_read >= MSG_LEN) {
-        return;
-    }
-    if (memcmp(cur_client->buffer, ack_msg, MSG_LEN) == 0) {
-        fprintf(stderr, "Ack accepted");
-    } else {
-        fprintf(stderr, "Ack failed");
-    }
-    remove_socket(number_of_sockets, sock_num, socket_polls);
+task_t *getTask(task_list_t *tasks, uuid_t client_uuid, string_gen_t *str_gen) {
+    task_t *task;
 
-}
-
-void fill_buffer(
-        u_char *buffer,
-        char *begin_task,
-        char *end_task,
-        const char *begin_string_suf,
-        const char *end_string_suf,
-        const char *current_string,
-        size_t length
-) {
-    uint16_t len = htons((uint16_t) length);
-    buffer[0] = (u_char) (len >> 16 & 0xFF);
-    buffer[1] = (u_char) (len & 0xFF);
-    memcpy(&buffer[2], current_string, length);
-    memcpy(&buffer[length + 2], begin_string_suf, 6);
-    memcpy(&buffer[length + 6 + 2], current_string, length);
-    memcpy(&buffer[length + 6 + 2 + length], end_string_suf, 6);
-    memcpy(begin_task, &buffer[2], length + 6);
-    memcpy(end_task, &buffer[length + 6 + 2], length + 6);
-}
-
-int next(char *string,
-         const char *alphabet,
-         int alphabet_length,
-         const ushort *reverse_table
-) {
-    int i = 0;
-    ushort length = (ushort) strlen(string);
-    for (; i < length; ++i) {
-        if (string[i] != alphabet[alphabet_length - 1]) {
+    int i;
+    int amount = tasks->amount;
+    for (i = 0; i < amount; ++i) {
+        if (tasks->tasks[i].status == TO_DO) {
             break;
         }
     }
-    if (i == length) {
-        for (; i <= length; ++i) {
-            string[i] = alphabet[0];
-        }
-        string[length + 1] = '\0';
+
+    if (i == amount) {
+        task = &(tasks->tasks[amount]);
+        get_next(str_gen);
+        fill_task(task, str_gen);
+        ++(tasks->amount);
     } else {
-        next_string(string, length, 0, alphabet, alphabet_length, reverse_table);
+        task = &(tasks->tasks[i]);
+    }
+
+    task->status = IN_PROGRESS;
+    task->timestamp = time(NULL);
+    memcpy(tasks->tasks[amount].uuid, client_uuid, UUID_LEN);
+    return task;
+}
+
+client_state get_status(void *buffer) {
+    if (memcmp(buffer, register_msg, MSG_LEN) == 0) {
+        return NEW;
+    }
+
+    if (memcmp(buffer, more_msg, MSG_LEN) == 0) {
+        return MORE;
+    }
+
+    if (memcmp(buffer, match_msg, MSG_LEN) == 0) {
+        return SUCCESS;
+    }
+
+    return UNKNOWN;
+}
+
+int handle_to_ack(void *buffer) {
+    if (memcmp(buffer, ack_msg, MSG_LEN) == 0) {
+        return SUCCESS_CODE;
+    }
+    return FAILURE_CODE;
+}
+
+
+void memcpy_next(void *buffer, const void *src, size_t n, size_t *written);
+
+void fill_task(task_t *task, string_gen_t *str_gen) {
+
+    char *cur_string = str_gen->current_string;
+    size_t length = strlen(cur_string);
+
+    size_t written = 0;
+    memcpy_next(task->begin, cur_string, length, &written);
+    memcpy_next(task->begin, str_gen->begin_string_suf, SUF_LEN, &written);
+
+    written = 0;
+    memcpy_next(task->end, cur_string, length, &written);
+    memcpy_next(task->end, str_gen->end_string_suf, SUF_LEN, &written);
+}
+
+size_t fill_buffer(u_char *buffer, task_t *task) {
+    size_t length = strlen(task->begin);
+
+    uint16_t len_to_send = htons((uint16_t) length);
+
+    size_t written = 0;
+    memcpy_next(buffer, &len_to_send, LEN_LEN, &written);
+
+    memcpy_next(buffer, task->begin, length, &written);
+    memcpy_next(buffer, task->end, length, &written);
+
+    return written;
+}
+
+void memcpy_next(void *buffer, const void *src, size_t n, size_t *written) {
+    memcpy(&buffer[*written], src, n);
+    *written += n;
+}
+
+void get_next(string_gen_t *str_gen) {
+    char *cur_string = str_gen->current_string;
+
+    ushort length = (ushort) strlen(cur_string);
+    enum next_action add = next_string(str_gen, length, 0);
+
+    if (add == ADD) {
+        cur_string[length] = str_gen->alphabet[0];
+        cur_string[length + 1] = '\0';
     }
 }
 
-int next_string(
-        char *string,
-        ushort length,
-        int index,
-        const char *alphabet,
-        int alphabet_length,
-        const ushort *reverse_table
-) {
+enum next_action {
+    ADD, NOT_ADD
+};
+
+enum next_action next_string(string_gen_t *str_gen, ushort length, int index) {
     if (index == length - 1) {
-        if (string[index] == alphabet[alphabet_length - 1]) {
-            string[index] = alphabet[0];
-            return 1;
-        } else {
-            string[index] = alphabet[reverse_table[string[index]] + 1];
-            return 0;
-        }
-    } else {
-        int result = next_string(
-                string,
-                length,
-                index + 1,
-                alphabet,
-                alphabet_length,
-                reverse_table
-        );
+        return change_sym(str_gen, index);
 
-        if (result == 1) {
-            if (string[index] == alphabet[alphabet_length - 1]) {
-                string[index] = alphabet[0];
-                return 1;
-            } else {
-                string[index] = alphabet[reverse_table[string[index]] + 1];
-                return 0;
-            }
-        } else {
-            return 0;
-        }
     }
+
+    int result = next_string(str_gen, length, index + 1);
+
+    if (result == ADD) {
+        return change_sym(str_gen, index);
+    }
+
+    return NOT_ADD;
 
 }
 
-void remove_socket(
-        nfds_t *number_of_sockets,
-        int number,
-        struct pollfd *socket_polls
-) {
-    --(*number_of_sockets);
-    nfds_t last = *number_of_sockets;
-    shutdown(socket_polls[number].fd, SHUT_RDWR);
-    close(socket_polls[number].fd);
+enum next_action change_sym(string_gen_t *str_gen, int index) {
+    char *string = str_gen->current_string;
+    const char *alphabet = str_gen->alphabet;
+    const int alphabet_length = str_gen->alphabet_length;
+    const ushort *reverse_table = str_gen->reverse_table;
+
+    char cur_sym = string[index];
+    ushort cur_position = reverse_table[cur_sym];
+
+    int next_position = (cur_position + 1) % alphabet_length;
+
+    string[index] = alphabet[next_position];
+    return (next_position == 0) ? ADD : NOT_ADD;
+}
+
+void remove_client(int number, poll_clients_t *poll_clients) {
+    --(poll_clients->amount);
+    nfds_t last = poll_clients->amount;
+
+
+    struct pollfd *polls = poll_clients->polls;
+
+    int socket_fd = polls[number].fd;
+    shutdown(socket_fd, SHUT_RDWR);
+    close(socket_fd);
+
+    client_t *clients = poll_clients->clients;
+
+    free(clients[number].buffer);
+
     if (number < last) {
-        socket_polls[number].fd = socket_polls[last].fd;
-        socket_polls[number].events = socket_polls[last].events;
-        socket_polls[number].revents = socket_polls[last].revents;
+        polls[number].fd = polls[last].fd;
+        polls[number].events = polls[last].events;
+        polls[number].revents = polls[last].revents;
+
+        clients[number].bytes_read = clients[last].bytes_read;
+        clients[number].buffer = clients[last].buffer;
+        clients[number].state = clients[last].state;
     }
 }
