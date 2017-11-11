@@ -3,6 +3,7 @@
 
 #include <sys/socket.h>
 #include <stdio.h>
+#include <openssl/md5.h>
 #include <stdlib.h>
 #include <netinet/in.h>
 #include <memory.h>
@@ -70,8 +71,9 @@ typedef struct string_gen {
 } string_gen_t;
 
 typedef struct tasks_srt {
-    task_list_t tasks;
+    task_list_t tasks_list;
     string_gen_t str_gen;
+    const char *hash;
 } tasks_srt_t;
 
 typedef struct poll_clients {
@@ -129,7 +131,6 @@ void init_poll_clients(poll_clients_t *poll_clients, struct pollfd *socket_polls
 
 int send_work(size_t msg_size, int socket_fd, client_t *cur_client);
 
-
-task_t *getTask(task_list_t *tasks, uuid_t client_uuid, string_gen_t *str_gen);
+task_t *get_task(tasks_srt_t *tasks_str, void *client_uuid);
 
 #endif //NET5_SERVER_H

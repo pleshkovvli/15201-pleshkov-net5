@@ -1,3 +1,4 @@
+#include <openssl/md5.h>
 #include "server.h"
 
 static char register_msg[] = "_NEW";
@@ -7,16 +8,18 @@ static char ack_msg[] = "_ACK";
 
 static const uint16_t PORT = 3112;
 
-int try_handle_unknown(poll_clients_t *poll_clients, int sock_num);
+int try_handle_unknown(client_t *cur_client);
 
-void try_handle_new(
-        const struct pollfd *cur_poll,
-        client_t *cur_client,
-        task_list_t *tasks,
-        string_gen_t *str_gen
-);
+int try_handle_new(tasks_srt_t *tasks_srt, int socket_fd, client_t *cur_client);
 
-int run_server() {
+int try_handle_more(tasks_srt_t *tasks_srt_gen, int socket_fd, client_t *cur_client);
+
+int try_handle_success(const task_list_t *tasks_list, int sock_num, client_t *cur_client,
+                       poll_clients_t *poll_clients, int *success, int *success_num);
+
+void try_handle_to_ack(const client_t *cur_client);
+
+int run_server(const char *hash) {
     int server_socket_fd = server_socket(PORT);
 
     if (server_socket_fd < 0) {
@@ -26,8 +29,9 @@ int run_server() {
 
 
     tasks_srt_t tasks_srt_gen;
+    tasks_srt_gen.hash = hash;
 
-    task_list_t *tasks_list = &tasks_srt_gen.tasks;
+    task_list_t *tasks_list = &tasks_srt_gen.tasks_list;
     tasks_list->tasks = malloc(sizeof(task_t) * MAX_CLIENTS);
     tasks_list->amount = 0;
 
@@ -39,9 +43,7 @@ int run_server() {
 
     init_poll_clients(&poll_clients, socket_polls);
 
-    string_gen_t str_gen;
-
-    if (init_string_gen(&str_gen) == FAILURE_CODE) {
+    if (init_string_gen(&tasks_srt_gen.str_gen) == FAILURE_CODE) {
         exit(1);
     }
 
@@ -115,68 +117,84 @@ int run_server() {
 
             cur_client->bytes_read += read;
 
+            int error_check = SUCCESS_CODE;
+            if(cur_client->state == UNKNOWN) {
+                error_check = try_handle_unknown(cur_client);
+            }
             switch (cur_client->state) {
-                case UNKNOWN: {
-                    try_handle_unknown(&poll_clients, sock_num);
-                }
+                case UNKNOWN:
+                    break;
                 case NEW: {
-                    try_handle_new(cur_poll, cur_client, tasks_list, &str_gen);
+                    error_check = try_handle_new(&tasks_srt_gen, cur_poll->fd, cur_client);
                 }
                     break;
                 case MORE: {
-                    if (cur_client->bytes_read >= CONF_LEN)
-                        handle_more(tasks_list, cur_poll->fd, cur_client);
+                    error_check = try_handle_more(&tasks_srt_gen, cur_poll->fd, cur_client);
                 }
                     break;
                 case SUCCESS: {
-                    if ((cur_client->bytes_read >= CONF_LEN)) {
-                        int result = handle_success(tasks_list, cur_client);
-                        if (result == FAILURE_CODE) {
-                            remove_client(sock_num, &poll_clients);
-                            success = FALSE;
-                            success_num = 0;
-                        } else {
-                            success = TRUE;
-                            success_num = sock_num;
-                        }
-                    }
+                    try_handle_success(tasks_list, sock_num, cur_client, &poll_clients, &success, &success_num);
                 }
                     break;
                 case TO_ACK: {
-                    if (cur_client->bytes_read >= MSG_LEN) {
-                        handle_to_ack(cur_client->buffer);
-                    }
+                    try_handle_to_ack(cur_client);
                 }
                     break;
+            }
+
+            if(error_check == FAILURE_CODE) {
+                remove_client(sock_num, &poll_clients);
             }
         }
     }
 }
 
-void try_handle_new(
-        const struct pollfd *cur_poll,
-        client_t *cur_client,
-        task_list_t *tasks,
-        string_gen_t *str_gen
-) {
-
-    if (cur_client->bytes_read < CONF_LEN) {
-        return;
+void try_handle_to_ack(const client_t *cur_client) {
+    if (cur_client->bytes_read >= MSG_LEN) {
+        handle_to_ack(cur_client->buffer);
     }
-
-    handle_new(tasks, cur_poll->fd, cur_client);
 }
 
-int try_handle_unknown(poll_clients_t *poll_clients, int sock_num) {
-    client_t *cur_client = &(poll_clients->clients[sock_num]);
+int try_handle_success(const task_list_t *tasks_list, int sock_num, client_t *cur_client,
+                       poll_clients_t *poll_clients, int *success, int *success_num) {
+    if ((cur_client->bytes_read >= CONF_LEN)) {
+        int result = handle_success(tasks_list, cur_client);
+        if (result == FAILURE_CODE) {
+            remove_client(sock_num, poll_clients);
+            (*success) = FALSE;
+            (*success_num) = 0;
+        } else {
+            (*success) = TRUE;
+            (*success_num) = sock_num;
+        }
+    }
+}
+
+int try_handle_more(tasks_srt_t *tasks_srt_gen, int socket_fd, client_t *cur_client) {
+    if (cur_client->bytes_read < CONF_LEN) {
+        return SUCCESS_CODE;
+    }
+
+    return handle_more(tasks_srt_gen, socket_fd, cur_client);
+
+}
+
+int try_handle_new(tasks_srt_t *tasks_srt, int socket_fd, client_t *cur_client) {
+    if (cur_client->bytes_read < CONF_LEN) {
+        return SUCCESS_CODE;
+    }
+
+    return handle_new(tasks_srt, socket_fd, cur_client);
+}
+
+int try_handle_unknown(client_t *cur_client) {
     if (cur_client->bytes_read < MSG_LEN) {
-        return FAILURE_CODE;
+        return SUCCESS_CODE;
     }
 
     client_state state = get_status(cur_client->buffer);
 
     if (state == UNKNOWN) {
-        remove_client(sock_num, poll_clients);
         return FAILURE_CODE;
     }
 
@@ -260,12 +278,12 @@ int check_uuid(const task_list_t *tasks, client_t *client) {
 
 
 int handle_more(tasks_srt_t *tasks_str, int socket_fd, client_t *cur_client) {
-    int task_num = check_uuid(&tasks_str->tasks, cur_client);
+    int task_num = check_uuid(&tasks_str->tasks_list, cur_client);
     if (task_num == FAILURE_CODE) {
         return FAILURE_CODE;
     }
 
-    task_t *task = getTask(tasks_str, cur_client->buffer, &tasks_str->str_gen);
+    task_t *task = get_task(tasks_str, &cur_client->buffer[MSG_LEN]);
     size_t msg_size = fill_buffer(cur_client->buffer, task);
 
     return send_work(msg_size, socket_fd, cur_client);
@@ -282,37 +300,60 @@ int send_work(size_t msg_size, int socket_fd, client_t *cur_client) {
     return SUCCESS_CODE;
 }
 
+
+size_t fill_buf_with_hash(u_char *buffer, task_t *task, const char *hash);
+
 int handle_new(tasks_srt_t *tasks_str, int socket_fd, client_t *cur_client) {
 
-    task_t *task = getTask(&(tasks_str->tasks), cur_client->buffer, &(tasks_str->str_gen));
-    size_t msg_size = fill_buffer(cur_client->buffer, task);
+    task_t *task = get_task(tasks_str, &cur_client->buffer[MSG_LEN]);
+    size_t msg_size = fill_buf_with_hash(cur_client->buffer, task, tasks_str->hash);
 
     return send_work(msg_size, socket_fd, cur_client);
 }
 
-task_t *getTask(task_list_t *tasks, uuid_t client_uuid, string_gen_t *str_gen) {
-    task_t *task;
-
+task_t *get_task(tasks_srt_t *tasks_str, void *client_uuid) {
     int i;
-    int amount = tasks->amount;
+    int amount = tasks_str->tasks_list.amount;
+    task_t *tasks = tasks_str->tasks_list.tasks;
+
+    int task_number = 0;
+    for(;task_number < amount; ++task_number) {
+        if(memcmp(tasks[task_number].uuid, client_uuid, UUID_LEN) == 0) {
+            tasks[task_number].status = IN_PROGRESS;
+            break;
+        }
+    }
     for (i = 0; i < amount; ++i) {
-        if (tasks->tasks[i].status == TO_DO) {
+        if (tasks[i].status == TO_DO) {
             break;
         }
     }
 
+    task_t *task;
+
+
+    task = &tasks[task_number];
     if (i == amount) {
-        task = &(tasks->tasks[amount]);
-        get_next(str_gen);
-        fill_task(task, str_gen);
-        ++(tasks->amount);
+        get_next(&tasks_str->str_gen);
+        fill_task(task, &(tasks_str->str_gen));
     } else {
-        task = &(tasks->tasks[i]);
+        task_t past_task = tasks[i];
+        task->status = past_task.status;
+        size_t b_len = strlen(past_task.begin);
+        memcpy(task->begin, past_task.begin, b_len);
+        task->begin[b_len] = '\0';
+        size_t e_len = strlen(past_task.end);
+        memcpy(task->end, past_task.end, e_len);
+        task->begin[e_len] = '\0';
+    }
+    
+    if(task_number == amount) {
+        ++(tasks_str->tasks_list.amount);
     }
 
     task->status = IN_PROGRESS;
     task->timestamp = time(NULL);
-    memcpy(tasks->tasks[amount].uuid, client_uuid, UUID_LEN);
+    memcpy(tasks[amount].uuid, client_uuid, UUID_LEN);
     return task;
 }
 
@@ -354,6 +395,12 @@ void fill_task(task_t *task, string_gen_t *str_gen) {
     written = 0;
     memcpy_next(task->end, cur_string, length, &written);
     memcpy_next(task->end, str_gen->end_string_suf, SUF_LEN, &written);
+}
+
+size_t fill_buf_with_hash(u_char *buffer, task_t *task, const char *hash) {
+    memcpy(buffer, hash, MD5_DIGEST_LENGTH);
+
+    return fill_buffer(&buffer[MD5_DIGEST_LENGTH], task) + MD5_DIGEST_LENGTH;
 }
 
 size_t fill_buffer(u_char *buffer, task_t *task) {
