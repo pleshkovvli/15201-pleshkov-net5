@@ -1,5 +1,12 @@
 #include "server.h"
 
+static char answer[32];
+
+void init_sock_polls(struct pollfd **socket_polls, int server_socket_fd);
+void destroy_sock_polls(struct pollfd *socket_polls);
+
+void cancel_success(cur_clients_t *cur_clients, success_t *success);
+
 void run_server(const char *hash, uint16_t port) {
     int server_socket_fd = server_socket(port);
 
@@ -10,21 +17,19 @@ void run_server(const char *hash, uint16_t port) {
     task_maker_t task_maker;
     init_task_maker(&task_maker, hash);
 
-    struct pollfd *socket_polls = malloc(sizeof(struct pollfd) * (MAX_CLIENTS + 1));
-
-    socket_polls[0].fd = server_socket_fd;
-    socket_polls[0].events = POLLIN;
-    socket_polls[0].revents = 0;
+    struct pollfd *sock_polls;
+    init_sock_polls(&sock_polls, server_socket_fd);
 
     cur_clients_t cur_clients;
-
-    init_cur_clients(&cur_clients, socket_polls);
+    init_cur_clients(&cur_clients, sock_polls);
 
     success_t success;
     init_success(&success);
 
-    while (1) {
-        int events = poll(socket_polls, cur_clients.amount + 1, TIMEOUT);
+    int closing = FALSE;
+
+    while (!closing || task_maker.tasks_list->amount > 0 || cur_clients.amount > 0) {
+        int events = poll(sock_polls, cur_clients.amount + 1, TIMEOUT);
 
         check_tasks(task_maker.tasks_list);
 
@@ -32,21 +37,21 @@ void run_server(const char *hash, uint16_t port) {
             continue;
         }
 
-        if (success.happened) {
+        if (!closing && success.happened) {
             int result = deal_with_success(&cur_clients, &success);
             if (result == SUCCESS_CODE) {
-                break;
+                closing = TRUE;
             }
         }
 
-        if (socket_polls[0].revents == POLLIN) {
+        if (sock_polls[0].revents == POLLIN) {
             --events;
             int client_fd = accept(server_socket_fd, NULL, NULL);
             add_client(&cur_clients, client_fd);
         }
 
         for (int sock_num = 0; sock_num < cur_clients.amount && events > 0; ++sock_num) {
-            struct pollfd *cur_poll = &socket_polls[sock_num];
+            struct pollfd *cur_poll = &sock_polls[sock_num];
             if (cur_poll->events == 0) {
                 continue;
             }
@@ -68,42 +73,63 @@ void run_server(const char *hash, uint16_t port) {
 
             cur_client->bytes_read += read;
 
-            int error_check = SUCCESS_CODE;
+            enum to_close for_close = DONT_CLOSE;
 
             if (cur_client->state == UNKNOWN) {
-                error_check = try_handle_unknown(cur_client);
+                for_close = try_handle_unknown(cur_client);
             }
 
             switch (cur_client->state) {
                 case UNKNOWN:
                     break;
                 case NEW: {
-                    error_check = try_handle_new(&task_maker, cur_poll->fd, cur_client);
+                    for_close = try_handle_new(&task_maker, cur_poll->fd, cur_client, closing);
                 }
                     break;
                 case MORE: {
-                    error_check = try_handle_more(&task_maker, cur_poll->fd, cur_client);
+                    for_close = try_handle_more(&task_maker, cur_poll->fd, cur_client, closing);
                 }
                     break;
                 case SUCCESS: {
-                    error_check = try_handle_success(
+                    for_close = try_handle_success(
                             task_maker.tasks_list, sock_num, cur_client, &success);
                 }
                     break;
                 case TO_ACK: {
-                    try_handle_to_ack(cur_client);
+                    for_close = try_handle_to_ack(cur_client);
                 }
                     break;
             }
 
-            if (error_check == FAILURE_CODE) {
+            if (for_close != DONT_CLOSE) {
+                if(closing && for_close == CLOSE_TASK){
+                    remove_task(task_maker.tasks_list, &cur_client->buffer[MSG_LEN]);
+                }
+
                 remove_client(&cur_clients, sock_num);
             }
         }
     }
 
+    printf("%s\n", answer);
+
+    close(server_socket_fd);
+
+    destroy_sock_polls(sock_polls);
     destroy_task_maker(&task_maker);
     destroy_cur_clients(&cur_clients);
+}
+
+void init_sock_polls(struct pollfd **socket_polls, int server_socket_fd) {
+    *socket_polls = malloc(sizeof(struct pollfd) * (MAX_CLIENTS + 1));
+
+    (*socket_polls)[0].fd = server_socket_fd;
+    (*socket_polls)[0].events = POLLIN;
+    (*socket_polls)[0].revents = 0;
+}
+
+void destroy_sock_polls(struct pollfd *socket_polls) {
+    free(socket_polls);
 }
 
 int deal_with_success(cur_clients_t *cur_clients, success_t *success) {
@@ -115,34 +141,37 @@ int deal_with_success(cur_clients_t *cur_clients, success_t *success) {
     }
 
     if (success_poll->revents != POLLIN) {
-        remove_client(cur_clients, success->num);
-        success->happened = FALSE;
-        success->num = -1;
+        cancel_success(cur_clients, success);
         return FAILURE_CODE;
     }
 
     ssize_t read = recv(success_poll->fd, successor->buffer, CLIENT_BUF_SIZE, 0);
 
     if (read < 0) {
-        remove_client(cur_clients, success->num);
-        success->happened = FALSE;
-        success->num = -1;
+        cancel_success(cur_clients, success);
         return FAILURE_CODE;
     }
 
     if ((success->str_length < 1) && successor->bytes_read >= READ_LEN) {
         u_char *buffer = successor->buffer;
         memcpy(&success->str_length, &buffer[CONF_LEN], LEN_LEN);
-        success->str_length = ntohs((*success).str_length);
+        success->str_length = ntohs(success->str_length);
     }
 
     int all_read = READ_LEN + success->str_length;
     if (successor->bytes_read >= all_read) {
         successor->buffer[all_read] = '\0';
+        memcpy(answer, &successor->buffer[READ_LEN], success->str_length + 1);
         return SUCCESS_CODE;
     }
 
     return FAILURE_CODE;
+}
+
+void cancel_success(cur_clients_t *cur_clients, success_t *success) {
+    remove_client(cur_clients, success->num);
+    success->happened = FALSE;
+    success->num = -1;
 }
 
 void check_tasks(const task_list_t *task_list) {

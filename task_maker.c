@@ -1,5 +1,6 @@
 #include "task_maker.h"
 #include "protocol.h"
+#include "get_task.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -48,4 +49,25 @@ int init_str_gen(str_gen_t *str_gen) {
 void destroy_str_gen(str_gen_t *str_gen) {
     free(str_gen->reverse_table);
     free(str_gen->cur_string);
+}
+
+void remove_task(task_list_t *tasks, uuid_t uuid) {
+    ushort uuid_num = 0;
+
+    for (; uuid_num < tasks->amount; ++uuid_num) {
+        if (memcmp(tasks->tasks[uuid_num].uuid, uuid, UUID_LEN) == 0) {
+            break;
+        }
+    }
+
+    if(uuid_num == tasks->amount) {
+        return;
+    }
+
+    --tasks->amount;
+
+    if(uuid_num < tasks->amount) {
+        copy_task(&tasks->tasks[uuid_num], &tasks->tasks[tasks->amount]);
+    }
+
 }

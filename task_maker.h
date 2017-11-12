@@ -29,6 +29,6 @@ void init_task_maker(task_maker_t *task_maker, const char *hash);
 void destroy_task_maker(task_maker_t *task_maker);
 int init_str_gen(str_gen_t *str_gen);
 void destroy_str_gen(str_gen_t *str_gen);
-
+void remove_task(task_list_t *tasks, uuid_t uuid);
 
 #endif //NET5_TASK_MAKER_H

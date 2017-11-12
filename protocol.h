@@ -20,6 +20,6 @@
 #define MATCH_MSG "MTCH"
 #define ACK_MSG "_ACK"
 #define DONE_MSG "DONE"
-#define DO_MSG "DO"
+#define DO_MSG "__DO"
 
 #endif //NET5_PROTOCOL_H
