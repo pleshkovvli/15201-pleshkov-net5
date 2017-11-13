@@ -1,5 +1,3 @@
-#include <bits/socket_type.h>
-#include <bits/socket.h>
 #include <sys/socket.h>
 #include <stdio.h>
 #include <netinet/in.h>
@@ -34,7 +32,8 @@ int run_client(const char *ip, uint16_t port) {
     uuid_t uuid = {};
     uuid_generate(uuid);
 
-    char hash[MD5_DIGEST_LENGTH];
+    printf("CLIENT UUID: ");
+    print_uuid(uuid);
 
     u_char buffer[CLIENT_BUF_SIZE];
     uint16_t length;
@@ -43,6 +42,8 @@ int run_client(const char *ip, uint16_t port) {
 
     while (1) {
         socket_fd = client_socket(ip, port);
+
+        fprintf(stderr, "CLIENT: connecting\n");
 
         int result = get_contact(TRUE, socket_fd, buffer, uuid, &length);
         close(socket_fd);
@@ -57,25 +58,38 @@ int run_client(const char *ip, uint16_t port) {
     range_values_t range;
     init_range(&range);
 
-    memcpy(range.hash_to_break, buffer, MD5_DIGEST_LENGTH);
-    memcpy(range.begin_word, &buffer[LEN_LEN + MD5_DIGEST_LENGTH], length);
-    memcpy(range.end_word, &buffer[LEN_LEN + MD5_DIGEST_LENGTH + length], length);
-
+    memcpy(range.hash_to_break, &buffer[MSG_LEN], MD5_DIGEST_LENGTH);
+    if (length > 1) {
+        memcpy(range.begin_word, &buffer[LEN_LEN + MD5_DIGEST_LENGTH], length);
+        memcpy(range.end_word, &buffer[LEN_LEN + MD5_DIGEST_LENGTH + length], length);
+    } else {
+        fprintf(stderr, "CLIENT: first\n");
+        memcpy(range.begin_word, "A", 2);
+        memcpy(range.end_word, "TTTTTTTTTT", 11);
+    }
 
     while (1) {
+        fprintf(stderr, "Checking...\n");
         int match = find_match_in(&range);
+        fprintf(stderr, "CLIENT: result is %d\n", match);
         if (match == MATCH) {
+            socket_fd = client_socket(ip, port);
+            fprintf(stderr, "CLIENT: connect...\n");
 
+            fprintf(stderr, "CLIENT: match\n");
             uint16_t match_length = (uint16_t) strlen(range.word);
 
-            match_length = htons(match_length);
+            fprintf(stderr, "CLIENT: length is %d\n", match_length);
+            uint16_t len_to_send = htons(match_length);
 
-            memcpy(buffer, match_msg, MSG_LEN);
-            memcpy(&buffer[MSG_LEN], &match_length, sizeof(uint16_t));
+            size_t written = 0;
 
-            memcpy(&buffer[MSG_LEN + sizeof(uint16_t)], range.word, match_length);
+            memcpy_next(buffer, match_msg, MSG_LEN, &written);
+            memcpy_next(buffer, uuid, UUID_LEN, &written);
+            memcpy_next(buffer, &len_to_send, sizeof(uint16_t), &written);
+            memcpy_next(buffer, range.word, match_length, &written);
 
-            send_all(socket_fd, buffer, 0, MSG_LEN + sizeof(uint16_t) + match_length);
+            send_all(socket_fd, buffer, 0, written);
 
             recv(socket_fd, buffer, MSG_LEN, 0);
 
@@ -87,7 +101,7 @@ int run_client(const char *ip, uint16_t port) {
 
         while (1) {
             socket_fd = client_socket(ip, port);
-
+            fprintf(stderr, "CLIENT: connect...\n");
             int result = get_contact(FALSE, socket_fd, buffer, uuid, &length);
             close(socket_fd);
             if (result == SUCCESS_CODE) {
@@ -102,6 +116,7 @@ int run_client(const char *ip, uint16_t port) {
         memcpy(range.end_word, &buffer[LEN_LEN + length], length);
     }
 
+    fprintf(stderr, "CLIENT: finishing\n");
     free_range(&range);
 }
 
@@ -130,16 +145,25 @@ int get_contact(int new, int socket_fd, void *buffer, const unsigned char *uuid,
         return FAILURE_CODE;
     }
 
+
+    fprintf(stderr, "CLIENT: send uuid\n");
+
     result = recv_next(buffer, socket_fd, MSG_LEN, &offset);
     if (result == FAILURE_CODE) {
         return FAILURE_CODE;
     }
+
+
+    fprintf(stderr, "CLIENT: receive message\n");
 
     if (memcmp(buffer, DONE_MSG, MSG_LEN) == 0) {
         return FAILURE_CODE;
     }
 
     if (new) {
+
+        fprintf(stderr, "CLIENT: new\n");
+
         result = new_contact(socket_fd, buffer, &offset);
 
         if (result == FAILURE_CODE) {
@@ -153,20 +177,36 @@ int get_contact(int new, int socket_fd, void *buffer, const unsigned char *uuid,
         return FAILURE_CODE;
     }
 
-    memcpy(length, buffer,
-           LEN_LEN);
-    (*length) =
-            ntohs((*length));
+    memcpy(length, &((char *)buffer)[offset - LEN_LEN], LEN_LEN);
+    (*length) = ntohs((*length));
 
-    result = recv_next(buffer, socket_fd, (*length) * (uint) 2, &offset);
 
-    if (result == FAILURE_CODE) {
-        return FAILURE_CODE;
+    fprintf(stderr, "CLIENT: length %d\n", *length);
+
+
+    if (!new || *length > 1) {
+
+
+        result = recv_next(buffer, socket_fd, (*length) * (uint) 2, &offset);
+
+        fprintf(stderr, "CLIENT: words\n");
+
+        if (result == FAILURE_CODE) {
+            return FAILURE_CODE;
+        }
+
+
     }
 
-    result = send_all(socket_fd, ack_msg, MSG_LEN, 0);
+    //write(0, buffer, offset);
+
+    result = send_all(socket_fd, ack_msg, 0, MSG_LEN);
+
+    fprintf(stderr, "CLIENT: send ack\n");
 
     if (result == FAILURE_CODE) {
+
+        fprintf(stderr, "CLIENT: send ack FAILURE\n");
         return FAILURE_CODE;
     }
 
@@ -174,15 +214,28 @@ int get_contact(int new, int socket_fd, void *buffer, const unsigned char *uuid,
 
     ssize_t chk = recv(socket_fd, &dum, 1, 0);
 
-    if (chk >= 0) {
+
+    fprintf(stderr, "CLIENT: got byte\n");
+
+    if (chk > 0) {
+        fprintf(stderr, "CLIENT: there is data! %ld %c\n", chk ,dum);
         return FAILURE_CODE;
     }
+
+
+    fprintf(stderr, "CLIENT: ok\n");
 
     return SUCCESS_CODE;
 }
 
 int new_contact(int socket_fd, const void *buffer, size_t *offset) {
     int result = recv_next(buffer, socket_fd, MD5_DIGEST_LENGTH, offset);
+
+
+    fprintf(stderr, "CLIENT: hash\n");
+
+    write(0, buffer, *offset);
+
     if (result == FAILURE_CODE) {
         return FAILURE_CODE;
     }
@@ -213,7 +266,7 @@ void fill_conf_buf(u_char *buffer, const char *msg, const unsigned char *uuid) {
 int send_all(int socket_fd, const void *buffer, size_t offset, size_t length) {
     ssize_t bytes_snd = 0;
     while (bytes_snd < length) {
-        ssize_t snd = send(socket_fd, &buffer[offset + bytes_snd], length - bytes_snd, 0);
+        ssize_t snd = send(socket_fd, &((char *)buffer)[offset + bytes_snd], length - bytes_snd, 0);
         if (snd < 0) {
             return FAILURE_CODE;
         }

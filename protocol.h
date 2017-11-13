@@ -13,8 +13,6 @@
 #define CONF_LEN (MSG_LEN + UUID_LEN)
 #define READ_LEN (CONF_LEN + LEN_LEN)
 
-#define SUF_LEN 6
-
 #define NEW_MSG "_NEW"
 #define MORE_MSG "MORE"
 #define MATCH_MSG "MTCH"

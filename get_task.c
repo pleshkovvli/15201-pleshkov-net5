@@ -1,6 +1,7 @@
 #include "get_task.h"
 #include "protocol.h"
 #include <string.h>
+#include <stdlib.h>
 
 task_t *get_task(task_maker_t *tasks_maker, void *client_uuid) {
     int amount = tasks_maker->tasks_list->amount;
@@ -14,12 +15,14 @@ task_t *get_task(task_maker_t *tasks_maker, void *client_uuid) {
     int to_do_num = get_todo_num(tasks, amount);
 
     if (task_num == amount) {
+        task->begin_str = malloc(32);
+        task->end_str = malloc(32);
         ++(tasks_maker->tasks_list->amount);
     }
 
     if (to_do_num == amount) {
-        get_next_str(tasks_maker->str_gen);
         fill_task(task, tasks_maker->str_gen);
+        get_next_str(tasks_maker->str_gen);
     } else {
         task_t *past_task = &tasks[to_do_num];
 
@@ -67,12 +70,15 @@ void fill_task(task_t *task, str_gen_t *str_gen) {
     size_t length = strlen(cur_string);
 
     size_t written = 0;
+    size_t suf_len = strlen(str_gen->begin_suf);
     memcpy_next(task->begin_str, cur_string, length, &written);
-    memcpy_next(task->begin_str, str_gen->begin_suf, SUF_LEN, &written);
+    memcpy_next(task->begin_str, str_gen->begin_suf, suf_len, &written);
+    task->begin_str[length + suf_len] = 0;
 
     written = 0;
     memcpy_next(task->end_str, cur_string, length, &written);
-    memcpy_next(task->end_str, str_gen->end_suf, SUF_LEN, &written);
+    memcpy_next(task->end_str, str_gen->end_suf, suf_len, &written);
+    task->end_str[length + suf_len] = 0;
 }
 
 void copy_task(task_t *dest, const task_t *src) {

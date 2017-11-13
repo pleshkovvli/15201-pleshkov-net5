@@ -1,11 +1,13 @@
 #include "task_maker.h"
 #include "protocol.h"
 #include "get_task.h"
+#include "handlers.h"
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 
-#define BEGIN_SUF "AAAAAA"
-#define END_SUF "TTTTTT"
+#define BEGIN_SUF "AAAAAAAAAA"
+#define END_SUF "TTTTTTTTTT"
 #define ALPHABET "ACGT"
 
 void init_task_maker(task_maker_t *task_maker, const char *hash) {
@@ -14,6 +16,8 @@ void init_task_maker(task_maker_t *task_maker, const char *hash) {
 
     task_maker->tasks_list->tasks = malloc(sizeof(task_t) * MAX_CLIENTS);
     task_maker->tasks_list->amount = 0;
+
+    task_maker->str_gen = malloc(sizeof(str_gen_t));
 
     init_str_gen(task_maker->str_gen);
 }
@@ -28,6 +32,8 @@ void destroy_task_maker(task_maker_t *task_maker) {
 int init_str_gen(str_gen_t *str_gen) {
     str_gen->reverse_table = malloc(sizeof(ushort) * 256);
     str_gen->cur_string = malloc(sizeof(char) * 32);
+    str_gen->cur_string[0] = 'A';
+    str_gen->cur_string[1] = '\0';
 
     if (str_gen->reverse_table == NULL || str_gen->cur_string == NULL) {
         return FAILURE_CODE;
@@ -49,10 +55,13 @@ int init_str_gen(str_gen_t *str_gen) {
 void destroy_str_gen(str_gen_t *str_gen) {
     free(str_gen->reverse_table);
     free(str_gen->cur_string);
+    free(str_gen);
 }
 
 void remove_task(task_list_t *tasks, uuid_t uuid) {
     ushort uuid_num = 0;
+
+    print_uuid(uuid);
 
     for (; uuid_num < tasks->amount; ++uuid_num) {
         if (memcmp(tasks->tasks[uuid_num].uuid, uuid, UUID_LEN) == 0) {

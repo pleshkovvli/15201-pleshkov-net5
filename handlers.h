@@ -17,13 +17,17 @@ enum to_close try_handle_more(task_maker_t *task_maker, int socket_fd, client_t 
 
 enum to_close try_handle_success(const task_list_t *tasks_list, int sock_num, client_t *cur_client, success_t *success);
 
+enum to_close try_handle_first(task_maker_t *task_maker, char* hash, int socket_fd, client_t *cur_client, int *first);
+
 enum to_close handle_to_ack(void *buffer);
 
 enum to_close handle_new(task_maker_t *task_maker, int socket_fd, client_t *cur_client);
 
-int handle_more(task_maker_t *tasks_str, int socket_fd, client_t *cur_client);
+enum to_close handle_more(task_maker_t *tasks_str, int socket_fd, client_t *cur_client);
 
 enum to_close handle_success(const task_list_t *tasks, client_t *cur_client);
+
+void print_uuid(const u_char *client_uuid);
 
 size_t fill_buf_with_hash(u_char *buffer, task_t *task, const char *hash);
 

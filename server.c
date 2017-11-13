@@ -3,6 +3,7 @@
 static char answer[32];
 
 void init_sock_polls(struct pollfd **socket_polls, int server_socket_fd);
+
 void destroy_sock_polls(struct pollfd *socket_polls);
 
 void cancel_success(cur_clients_t *cur_clients, success_t *success);
@@ -28,36 +29,52 @@ void run_server(const char *hash, uint16_t port) {
 
     int closing = FALSE;
 
+    int first = TRUE;
+
     while (!closing || task_maker.tasks_list->amount > 0 || cur_clients.amount > 0) {
-        int events = poll(sock_polls, cur_clients.amount + 1, TIMEOUT);
+        printf("Closing is %d, tasks are %d, clients are %d\n", closing, task_maker.tasks_list->amount, cur_clients.amount);
+        int events = poll(sock_polls, cur_clients.amount + 1, TIMEOUT_MS);
+
+        fprintf(stderr, "Poll\n");
 
         check_tasks(task_maker.tasks_list);
 
-        if (events == 0) {
-            continue;
-        }
-
         if (!closing && success.happened) {
-            int result = deal_with_success(&cur_clients, &success);
-            if (result == SUCCESS_CODE) {
+            printf("Dealing with success...\n");
+            u_char *success_uuid = &cur_clients.clients[success.num].buffer[MSG_LEN];
+            print_uuid(success_uuid);
+            enum to_close result = deal_with_success(&cur_clients, &success);
+            print_uuid(success_uuid);
+            if (result == CLOSE_SOCK) {
+                printf("%s\n", answer);
+                fprintf(stderr, "Removing task and client\n");
+                remove_task(task_maker.tasks_list, success_uuid);
+                remove_client(&cur_clients, success.num);
                 closing = TRUE;
             }
         }
 
+        if (events == 0) {
+            fprintf(stderr, "Empty poll\n");
+            continue;
+        }
+
         if (sock_polls[0].revents == POLLIN) {
             --events;
+            fprintf(stderr, "Accepting client\n");
             int client_fd = accept(server_socket_fd, NULL, NULL);
             add_client(&cur_clients, client_fd);
         }
 
         for (int sock_num = 0; sock_num < cur_clients.amount && events > 0; ++sock_num) {
-            struct pollfd *cur_poll = &sock_polls[sock_num];
-            if (cur_poll->events == 0) {
+            struct pollfd *cur_poll = &cur_clients.polls[sock_num];
+            if (cur_poll->revents == 0) {
                 continue;
             }
 
             --events;
-            if (cur_poll->events != POLLIN) {
+            if (cur_poll->revents != POLLIN) {
+                fprintf(stderr, "ERROR: removing client on poll\n");
                 remove_client(&cur_clients, sock_num);
                 continue;
             }
@@ -67,6 +84,7 @@ void run_server(const char *hash, uint16_t port) {
             ssize_t read = recv(cur_poll->fd, cur_client->buffer, CLIENT_BUF_SIZE, 0);
 
             if (read < 0) {
+                fprintf(stderr, "ERROR: removing client on read\n");
                 remove_client(&cur_clients, sock_num);
                 continue;
             }
@@ -76,6 +94,7 @@ void run_server(const char *hash, uint16_t port) {
             enum to_close for_close = DONT_CLOSE;
 
             if (cur_client->state == UNKNOWN) {
+                fprintf(stderr, "UNKNOWN\n");
                 for_close = try_handle_unknown(cur_client);
             }
 
@@ -83,36 +102,53 @@ void run_server(const char *hash, uint16_t port) {
                 case UNKNOWN:
                     break;
                 case NEW: {
-                    for_close = try_handle_new(&task_maker, cur_poll->fd, cur_client, closing);
+                    fprintf(stderr, "NEW\n");
+                    if (first) {
+                        fprintf(stderr, "FIRST\n");
+                        for_close = try_handle_first(&task_maker, hash, cur_poll->fd, cur_client, &first);
+                    } else {
+                        for_close = try_handle_new(&task_maker, cur_poll->fd, cur_client, closing);
+                    }
                 }
                     break;
                 case MORE: {
+
+                    fprintf(stderr, "MORE\n");
                     for_close = try_handle_more(&task_maker, cur_poll->fd, cur_client, closing);
                 }
                     break;
                 case SUCCESS: {
+                    fprintf(stderr, "SUCCESS\n");
                     for_close = try_handle_success(
                             task_maker.tasks_list, sock_num, cur_client, &success);
                 }
                     break;
                 case TO_ACK: {
+
+                    fprintf(stderr, "ACK\n");
                     for_close = try_handle_to_ack(cur_client);
                 }
                     break;
             }
 
+            cur_poll->revents = 0;
+            fprintf(stderr, "Now events are %d\n", cur_poll->events);
+
             if (for_close != DONT_CLOSE) {
-                if(closing && for_close == CLOSE_TASK){
+                if (closing && for_close == CLOSE_TASK) {
+                    fprintf(stderr, "Removing task\n");
                     remove_task(task_maker.tasks_list, &cur_client->buffer[MSG_LEN]);
                 }
 
+
+                fprintf(stderr, "Removing client\n");
                 remove_client(&cur_clients, sock_num);
             }
         }
     }
 
-    printf("%s\n", answer);
 
+    fprintf(stderr, "Finishing server\n");
     close(server_socket_fd);
 
     destroy_sock_polls(sock_polls);
@@ -132,24 +168,39 @@ void destroy_sock_polls(struct pollfd *socket_polls) {
     free(socket_polls);
 }
 
-int deal_with_success(cur_clients_t *cur_clients, success_t *success) {
+enum to_close deal_with_success(cur_clients_t *cur_clients, success_t *success) {
     struct pollfd *success_poll = &(cur_clients->polls[success->num]);
     client_t *successor = &(cur_clients->clients[success->num]);
 
+    if ((success->str_length < 1) && successor->bytes_read >= READ_LEN) {
+        u_char *buffer = successor->buffer;
+        memcpy(&success->str_length, &buffer[CONF_LEN], LEN_LEN);
+        success->str_length = ntohs(success->str_length);
+    }
+
+    if(success->str_length > 0) {
+        int all_read = READ_LEN + success->str_length;
+        if (successor->bytes_read >= all_read) {
+            successor->buffer[all_read] = '\0';
+            memcpy(answer, &successor->buffer[READ_LEN], success->str_length + 1);
+            return CLOSE_SOCK;
+        }
+    }
+
     if (success_poll->revents == 0) {
-        return FAILURE_CODE;
+        return DONT_CLOSE;
     }
 
     if (success_poll->revents != POLLIN) {
         cancel_success(cur_clients, success);
-        return FAILURE_CODE;
+        return CLOSE_TASK;
     }
 
     ssize_t read = recv(success_poll->fd, successor->buffer, CLIENT_BUF_SIZE, 0);
 
     if (read < 0) {
         cancel_success(cur_clients, success);
-        return FAILURE_CODE;
+        return CLOSE_TASK;
     }
 
     if ((success->str_length < 1) && successor->bytes_read >= READ_LEN) {
@@ -162,10 +213,10 @@ int deal_with_success(cur_clients_t *cur_clients, success_t *success) {
     if (successor->bytes_read >= all_read) {
         successor->buffer[all_read] = '\0';
         memcpy(answer, &successor->buffer[READ_LEN], success->str_length + 1);
-        return SUCCESS_CODE;
+        return CLOSE_SOCK;
     }
 
-    return FAILURE_CODE;
+    return DONT_CLOSE;
 }
 
 void cancel_success(cur_clients_t *cur_clients, success_t *success) {

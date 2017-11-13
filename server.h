@@ -18,14 +18,17 @@
 #include <uuid/uuid.h>
 #include <zconf.h>
 
-#define TIMEOUT 3
+#define TIMEOUT_MS 3000
 #define TIME_TO_DO 30
 
 void init_success(success_t *success);
 
-int deal_with_success(cur_clients_t *cur_clients, success_t *success);
+enum to_close deal_with_success(cur_clients_t *cur_clients, success_t *success);
 
 int server_socket(uint16_t port);
+
+
+void run_server(const char *hash, uint16_t port);
 
 void check_tasks(const task_list_t *task_list);
 

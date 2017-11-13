@@ -4,6 +4,7 @@
 #include "cur_clients.h"
 
 void init_cur_clients(cur_clients_t *cur_clients, struct pollfd *polls) {
+    cur_clients->amount = 0;
     cur_clients->clients = malloc(sizeof(client_t) * MAX_CLIENTS);
     cur_clients->polls = &polls[1];
 }
@@ -24,6 +25,8 @@ void add_client(cur_clients_t *cur_clients, int socket_fd) {
     poll->fd = socket_fd;
     poll->events = POLLIN;
     poll->revents = 0;
+
+    ++cur_clients->amount;
 }
 
 void remove_client(cur_clients_t *cur_clients, int number) {
