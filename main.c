@@ -9,12 +9,17 @@
 #include "client.h"
 
 int main(int argc, char *argv[]) {
-
     if(fork() == 0) {
         sleep(2);
         run_client("127.0.0.1", 3112);
+    } else if(fork() == 0) {
+        sleep(2);
+        run_client("127.0.0.1", 3112);
+    } else if(fork() == 0) {
+        sleep(2);
+        run_client("127.0.0.1", 3112);
     } else {
-        char *string = "ACGTAGTTAGT";
+        char *string = "TCGA";
         char hash[MD5_DIGEST_LENGTH];
         MD5((u_char *) string, strlen(string), (u_char *) hash);
         run_server(hash, 3112);

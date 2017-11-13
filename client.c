@@ -60,8 +60,8 @@ int run_client(const char *ip, uint16_t port) {
 
     memcpy(range.hash_to_break, &buffer[MSG_LEN], MD5_DIGEST_LENGTH);
     if (length > 1) {
-        memcpy(range.begin_word, &buffer[LEN_LEN + MD5_DIGEST_LENGTH], length);
-        memcpy(range.end_word, &buffer[LEN_LEN + MD5_DIGEST_LENGTH + length], length);
+        memcpy(range.begin_word, &buffer[MSG_LEN + LEN_LEN + MD5_DIGEST_LENGTH], length);
+        memcpy(range.end_word, &buffer[MSG_LEN + LEN_LEN + MD5_DIGEST_LENGTH + length], length);
     } else {
         fprintf(stderr, "CLIENT: first\n");
         memcpy(range.begin_word, "A", 2);
@@ -69,7 +69,8 @@ int run_client(const char *ip, uint16_t port) {
     }
 
     while (1) {
-        fprintf(stderr, "Checking...\n");
+        fprintf(stderr, "%02x%02x ",uuid[0], uuid[2]);
+        fprintf(stderr, "Checking ~~~~~~~~~~~~~~~~~ %s--%s...\n", range.begin_word, range.end_word);
         int match = find_match_in(&range);
         fprintf(stderr, "CLIENT: result is %d\n", match);
         if (match == MATCH) {
@@ -112,11 +113,13 @@ int run_client(const char *ip, uint16_t port) {
         }
 
 
-        memcpy(range.begin_word, &buffer[LEN_LEN], length);
-        memcpy(range.end_word, &buffer[LEN_LEN + length], length);
+        memcpy(range.begin_word, &buffer[MSG_LEN + LEN_LEN], length);
+        range.begin_word[length] = 0;
+        memcpy(range.end_word, &buffer[MSG_LEN + LEN_LEN + length], length);
+        range.end_word[length] = 0;
     }
 
-    fprintf(stderr, "CLIENT: finishing\n");
+    fprintf(stderr, "CLIENT: finishing with success\n");
     free_range(&range);
 }
 
@@ -157,7 +160,22 @@ int get_contact(int new, int socket_fd, void *buffer, const unsigned char *uuid,
     fprintf(stderr, "CLIENT: receive message\n");
 
     if (memcmp(buffer, DONE_MSG, MSG_LEN) == 0) {
-        return FAILURE_CODE;
+        send_all(socket_fd, ACK_MSG, 0, MSG_LEN);
+
+        char dum;
+
+        ssize_t chk = recv(socket_fd, &dum, 1, 0);
+
+
+        fprintf(stderr, "CLIENT: got byte\n");
+
+        if (chk > 0) {
+            fprintf(stderr, "CLIENT: there is data! %ld %c\n", chk ,dum);
+        }
+
+        fprintf(stderr, "CLIENT: finishing on DONE\n");
+
+        exit(EXIT_SUCCESS);
     }
 
     if (new) {

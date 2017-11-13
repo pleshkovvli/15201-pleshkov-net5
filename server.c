@@ -46,7 +46,7 @@ void run_server(const char *hash, uint16_t port) {
             enum to_close result = deal_with_success(&cur_clients, &success);
             print_uuid(success_uuid);
             if (result == CLOSE_SOCK) {
-                printf("%s\n", answer);
+                printf("ANSWER-------%s-------ANSWER\n", answer);
                 fprintf(stderr, "Removing task and client\n");
                 remove_task(task_maker.tasks_list, success_uuid);
                 remove_client(&cur_clients, success.num);

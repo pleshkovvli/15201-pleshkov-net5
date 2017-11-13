@@ -119,6 +119,7 @@ enum to_close try_handle_new(task_maker_t *task_maker, int socket_fd, client_t *
 enum to_close handle_closing(const task_maker_t *task_maker, int sock_fd, client_t *cur_client) {
     int task_num = check_uuid(task_maker->tasks_list, cur_client);
     if (task_num == FAILURE_CODE) {
+        fprintf(stderr, "UUID check on closing failed\n");
         return CLOSE_SOCK;
     }
 
