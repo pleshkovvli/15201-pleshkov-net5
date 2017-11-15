@@ -12,30 +12,20 @@ typedef enum {
     SUCCESS
 } client_state;
 
-typedef enum {
-    IN_PROGRESS, TO_DO
-} task_status;
-
-typedef struct success {
-    int happened;
-    int num;
-    ushort str_length;
-} success_t;
-
 typedef struct client {
     u_char *buffer;
+    uuid_t uuid;
+    int got_uuid;
     ushort bytes_read;
     client_state state;
 } client_t;
 
 typedef struct task {
-    task_status status;
     uuid_t uuid;
     time_t timestamp;
     char *begin_str;
     char *end_str;
 } task_t;
-
 
 typedef struct cur_clients {
     struct pollfd *polls;

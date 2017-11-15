@@ -1,4 +1,4 @@
-#include "check_strings.h"
+#include "md5-cracker.h"
 #include "check_strings_inner.h"
 
 int find_match_in(range_values_t *range_values) {
@@ -177,13 +177,16 @@ ushort get_position(
         ushort *reverse_table
 ) {
     int same_length = (word_length == strlen(key_word));
+
     if(!same_length) {
         return default_value;
     }
+
     int start_key_word = (index == 0);
     if(start_key_word) {
         return reverse_table[key_word[index]];
     }
+
     int continue_key_word = (strncmp(word, key_word, index) == 0);
     return continue_key_word ? reverse_table[key_word[index]] : default_value;
 }

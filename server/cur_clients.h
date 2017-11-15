@@ -1,9 +1,9 @@
 #ifndef NET5_SERVER_HANDLING_H
 #define NET5_SERVER_HANDLING_H
 
-#include "types.h"
+#include "../types.h"
 
-#define MAX_CLIENTS 64
+#define MAX_CLIENTS 1024
 #define CLIENT_BUF_SIZE 64
 
 void init_cur_clients(cur_clients_t *cur_clients, struct pollfd *polls);

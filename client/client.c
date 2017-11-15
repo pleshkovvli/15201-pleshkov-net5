@@ -4,8 +4,10 @@
 #include <memory.h>
 #include <arpa/inet.h>
 #include "client.h"
-#include "server.h"
-#include "check_strings.h"
+#include "../server/server.h"
+#include "../md5-cracker/md5-cracker.h"
+#include "../utils/memcpy_next.h"
+#include "../utils/sock_utils.h"
 
 static const char new_msg[] = "_NEW";
 static const char more_msg[] = "MORE";
@@ -14,7 +16,6 @@ static const char ack_msg[] = "_ACK";
 
 int client_socket(const char *ip, uint16_t port);
 
-int send_all(int socket_fd, const void *buffer, size_t offset, size_t length);
 
 void fill_conf_buf(u_char *buffer, const char *msg, const unsigned char *uuid);
 
@@ -279,20 +280,6 @@ int recv_next(u_char *buffer, int socket_fd, size_t length, size_t *offset) {
 void fill_conf_buf(u_char *buffer, const char *msg, const unsigned char *uuid) {
     memcpy(buffer, msg, MSG_LEN);
     memcpy(&buffer[MSG_LEN], uuid, UUID_LEN);
-}
-
-int send_all(int socket_fd, const void *buffer, size_t offset, size_t length) {
-    ssize_t bytes_snd = 0;
-    while (bytes_snd < length) {
-        ssize_t snd = send(socket_fd, &((char *)buffer)[offset + bytes_snd], length - bytes_snd, 0);
-        if (snd < 0) {
-            return FAILURE_CODE;
-        }
-
-        bytes_snd += snd;
-    }
-
-    return SUCCESS_CODE;
 }
 
 int client_socket(const char *ip, uint16_t port) {

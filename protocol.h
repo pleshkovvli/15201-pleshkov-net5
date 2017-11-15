@@ -7,6 +7,8 @@
 #define TRUE 1
 #define FALSE 0
 
+#define MAX_STR_LEN 32
+
 #define MSG_LEN 4
 #define UUID_LEN 16
 #define LEN_LEN 2

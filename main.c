@@ -4,22 +4,22 @@
 #include <sys/param.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include "check_strings.h"
-#include "server.h"
-#include "client.h"
+#include "md5-cracker/md5-cracker.h"
+#include "server/server.h"
+#include "client/client.h"
 
 int main(int argc, char *argv[]) {
     if(fork() == 0) {
-        sleep(2);
+        printf("RUN");
         run_client("127.0.0.1", 3112);
     } else if(fork() == 0) {
-        sleep(2);
+        printf("RUN");
         run_client("127.0.0.1", 3112);
     } else if(fork() == 0) {
-        sleep(2);
+        printf("RUN");
         run_client("127.0.0.1", 3112);
     } else {
-        char *string = "TCGA";
+        char *string = "TCGTTTATATATAT";
         char hash[MD5_DIGEST_LENGTH];
         MD5((u_char *) string, strlen(string), (u_char *) hash);
         run_server(hash, 3112);

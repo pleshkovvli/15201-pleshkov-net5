@@ -26,7 +26,7 @@ void add_client(cur_clients_t *cur_clients, int socket_fd) {
     poll->events = POLLIN;
     poll->revents = 0;
 
-    ++cur_clients->amount;
+    ++(cur_clients->amount);
 }
 
 void remove_client(cur_clients_t *cur_clients, int number) {
@@ -37,6 +37,7 @@ void remove_client(cur_clients_t *cur_clients, int number) {
     client_t *clients = cur_clients->clients;
 
     int socket_fd = polls[number].fd;
+
     shutdown(socket_fd, SHUT_RDWR);
     close(socket_fd);
 
