@@ -1,9 +1,9 @@
 #include <stdlib.h>
 #include "sock_polls.h"
-#include "cur_clients.h"
+#include "../cur_clients/cur_clients.h"
 
-void init_sock_polls(struct pollfd **socket_polls, int server_socket_fd) {
-    *socket_polls = malloc(sizeof(struct pollfd) * (MAX_CLIENTS + 1));
+void init_sock_polls(struct pollfd **socket_polls, int server_socket_fd, uint max_clients) {
+    *socket_polls = malloc(sizeof(struct pollfd) * (max_clients + 1));
 
     (*socket_polls)[0].fd = server_socket_fd;
     (*socket_polls)[0].events = POLLIN;

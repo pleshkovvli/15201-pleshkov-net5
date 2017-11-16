@@ -1,13 +1,12 @@
-#include "handlers.h"
-#include "../utils/memcpy_next.h"
-#include "../utils/sock_utils.h"
-
-#include <stdint.h>
-#include <openssl/md5.h>
 #include <arpa/inet.h>
 #include <memory.h>
-#include <stdio.h>
-#include <stdlib.h>
+#include <openssl/md5.h>
+#include "../protocol.h"
+#include "cur_clients/client_type.h"
+#include "handlers.h"
+#include "../agreements.h"
+#include "../utils/sock_utils.h"
+#include "../utils/memcpy_next.h"
 
 static char new_msg[] = NEW_MSG;
 static char more_msg[] = MORE_MSG;
@@ -41,83 +40,167 @@ handle_res_t try_handle_to_ack(const client_t *cur_client) {
     return handle_to_ack(cur_client->buffer);
 }
 
-handle_res_t try_handle_success(
-        const task_list_t *tasks_list,
-        int sock_num,
-        client_t *cur_client,
-        success_t *success
-) {
-    if(success->happened) {
+handle_res_t handle_to_ack(void *buffer) {
+    if (memcmp(buffer, ack_msg, MSG_LEN) == 0) {
+        return SUCCESS_RES;
+    }
+
+    return FAILURE_RES;
+}
+
+handle_res_t try_handle_success(server_t *server) {
+    if(server->success->happened) {
         return FAILURE_RES;
     }
 
-    if (cur_client->bytes_read < CONF_LEN) {
+    if (server->cur_client->bytes_read < CONF_LEN) {
         return UNFINISHED;
     }
 
-    handle_res_t result = handle_success(tasks_list, cur_client);
+    handle_res_t result = check_set_uuid(server->task_manager->tasks_going, server->cur_client);
     if (result == SUCCESS_RES) {
-        //fprintf(stderr, "SUCCESS CONFIRMED\n");
-        success->happened = TRUE;
-        success->num = sock_num;
+        server->success->happened = TRUE;
+        server->success->num = server->client_num;
     } else {
         return FAILURE_RES;
     }
 
-    handle_res_t succeed = check_success(success, cur_client);
-    return succeed;
-}
+    handle_res_t process_res = process_success(server->success, server->cur_client);
 
-handle_res_t try_handle_more(task_manager_t *task_maker, int socket_fd, client_t *cur_client) {
-    if (cur_client->bytes_read < CONF_LEN) {
-        return UNFINISHED;
+    if(process_res == SUCCESS_CODE) {
+        send_done(server);
     }
 
-    return handle_more(task_maker, socket_fd, cur_client);
-
+    return process_res;
 }
 
-handle_res_t try_handle_new(task_manager_t *task_maker, int socket_fd, client_t *cur_client) {
-    if (cur_client->bytes_read < CONF_LEN) {
-        return UNFINISHED;
-    }
+handle_res_t check_set_uuid(const task_list_t *tasks, client_t *cur_client) {
+    int check_res = check_uuid(tasks, cur_client);
 
-    return handle_new(task_maker, socket_fd, cur_client);
-}
-
-handle_res_t try_handle_close(const task_manager_t *task_maker, int sock_fd, client_t *cur_client) {
-    if (cur_client->bytes_read < CONF_LEN) {
-        return UNFINISHED;
-    }
-
-    return handle_close(task_maker, sock_fd, cur_client);
-}
-
-handle_res_t handle_close(const task_manager_t *task_manager, int sock_fd, client_t *cur_client) {
-    int task_num = check_uuid(task_manager->tasks_going, cur_client);
-
-    if (task_num == FAILURE_CODE) {
-        //fprintf(stderr, "UUID check on closing failed\n");
+    if (check_res == FAILURE_CODE) {
         return FAILURE_RES;
     }
 
     u_char *uuid = &cur_client->buffer[MSG_LEN];
     set_uuid(cur_client, uuid);
 
-    return send_done(sock_fd, cur_client);
+    return SUCCESS_RES;
+}
+
+handle_res_t process_success(success_t *success, const client_t *successor) {
+    if ((success->str_len < 1) && successor->bytes_read >= READ_LEN) {
+        u_char *buffer = successor->buffer;
+        
+        uint16_t len_recv;
+        memcpy(&len_recv, &buffer[CONF_LEN], LEN_LEN);
+        
+        success->str_len = ntohs(len_recv);
+        if(success->str_len < 1) {
+            return FAILURE_RES;
+        }
+    }
+
+    if(success->str_len > 0) {
+        int all_read = READ_LEN + success->str_len;
+        if (successor->bytes_read >= all_read) {
+            successor->buffer[all_read] = '\0';
+            memcpy(success->answer, &successor->buffer[READ_LEN], success->str_len + 1);;
+            return SUCCESS_RES;
+        }
+    }
+
+    return UNFINISHED;
+}
+
+handle_res_t try_handle_more(server_t *server) {
+    if (server->cur_client->bytes_read < CONF_LEN) {
+        return UNFINISHED;
+    }
+
+    return handle_more(server);
 
 }
 
-handle_res_t send_done(int sock_fd, client_t *cur_client) {
-    memcpy(cur_client->buffer, DONE_MSG, MSG_LEN);
+handle_res_t handle_more(server_t *server) {
+    client_t *client = server->cur_client;
 
-    int result = send_all(sock_fd, cur_client->buffer, 0, MSG_LEN);
+    int result = check_set_uuid(server->task_manager->tasks_to_do, client);
+    if(result == FAILURE_RES) {
+        return FAILURE_RES;
+
+    }
+
+    task_t *task = next_task(server);
+    if(task == NULL) {
+        return handle_closing(server);
+    }
+    
+    size_t msg_size = fill_buf_more(client->buffer, task);
+
+    return send_work(msg_size, server->cur_poll->fd, client);
+
+}
+
+handle_res_t try_handle_new(server_t *server) {
+    if (server->cur_client->bytes_read < CONF_LEN) {
+        return UNFINISHED;
+    }
+
+    return handle_new(server);
+}
+
+handle_res_t handle_new(server_t *server) {
+    client_t *client = server->cur_client;
+    
+    u_char *uuid = &client->buffer[MSG_LEN];
+    set_uuid(client, uuid);
+    
+    task_t *task = next_task(server);
+    if(task == NULL) {
+        return handle_closing(server);
+    }
+    
+    size_t msg_size = fill_buf_new(client->buffer, task, server->task_manager->hash);
+
+    return send_work(msg_size, server->cur_poll->fd, client);
+}
+
+
+handle_res_t try_handle_closing(server_t *server) {
+    if (server->cur_client->bytes_read < CONF_LEN) {
+        return UNFINISHED;
+    }
+
+    return handle_closing(server);
+}
+
+handle_res_t handle_closing(server_t *server) {
+    client_t *client = server->cur_client;
+    
+    int task_num = check_uuid(server->task_manager->tasks_going, client);
+
+    if (task_num == FAILURE_CODE) {
+        return FAILURE_RES;
+    }
+
+    u_char *uuid = &client->buffer[MSG_LEN];
+    set_uuid(client, uuid);
+
+    return send_done(server);
+
+}
+
+handle_res_t send_done(server_t *server) {
+    client_t *client = server->cur_client;
+    memcpy(client->buffer, DONE_MSG, MSG_LEN);
+
+    int result = send_all(server->cur_poll->fd, client->buffer, 0, MSG_LEN);
     if(result == FAILURE_CODE) {
         return FAILURE_RES;
     }
 
-    cur_client->state = TO_ACK;
-    cur_client->bytes_read = 0;
+    client->state = TO_ACK;
+    client->bytes_read = 0;
     
     return UNFINISHED;
 }
@@ -137,108 +220,20 @@ handle_res_t try_handle_unknown(client_t *cur_client) {
     return UNFINISHED;
 }
 
-
-handle_res_t handle_to_ack(void *buffer) {
-    if (memcmp(buffer, ack_msg, MSG_LEN) == 0) {
-        return SUCCESS_RES;
-    }
-
-    return FAILURE_RES;
-}
-
-handle_res_t handle_success(const task_list_t *tasks, client_t *cur_client) {
-    int task_num = check_uuid(tasks, cur_client);
-
-    if (task_num == FAILURE_CODE) {
-        //fprintf(stderr, "SUCCESS UUID CHECK FAILED\n");
-        return FAILURE_RES;
-    }
-
-    u_char *uuid = &cur_client->buffer[MSG_LEN];
-    set_uuid(cur_client, uuid);
-
-    return SUCCESS_RES;
-}
-
-
-handle_res_t handle_more(task_manager_t *tasks_manager, int socket_fd, client_t *cur_client) {
-    int task_num = check_uuid(tasks_manager->tasks_to_do, cur_client);
-    
-    if (task_num == FAILURE_CODE) {
-        return FAILURE_RES;
-    }
-
-    u_char *uuid = &cur_client->buffer[MSG_LEN];
-    set_uuid(cur_client, uuid);
-    task_t *task = get_task(tasks_manager, uuid);
-    
-    //fprintf(stderr, "%s--%s\n", task->begin_str, task->end_str);
-
-    size_t msg_size = fill_buf_more(cur_client->buffer, task);
-
-    return send_work(msg_size, socket_fd, cur_client);
-
-}
-
-handle_res_t handle_new(task_manager_t *task_maker, int socket_fd, client_t *cur_client) {
-    u_char *uuid = &cur_client->buffer[MSG_LEN];
-    set_uuid(cur_client, uuid);
-    task_t *task = get_task(task_maker, uuid);
-    //fprintf(stderr, "%s--%s\n", task->begin_str, task->end_str);
-
-    size_t msg_size = fill_buf_new(cur_client->buffer, task, task_maker->hash);
-
-    return send_work(msg_size, socket_fd, cur_client);
-}
-
-int check_uuid(const task_list_t *tasks, client_t *client) {
-    u_char *client_uuid = &(client->buffer[MSG_LEN]);
-    //print_uuid(client_uuid);
-    //printf("%d\n", tasks->amount);
-
+int check_uuid(const task_list_t *tasks, client_t *client) { ;
     for (int uuid_num = 0; uuid_num < tasks->amount; ++uuid_num) {
-        //print_uuid(tasks->tasks[uuid_num]->uuid);
-        if (memcmp(tasks->tasks[uuid_num]->uuid, client_uuid, UUID_LEN) == 0) {
+        if (memcmp(tasks->tasks[uuid_num]->uuid, client->uuid, UUID_LEN) == 0) {
             return uuid_num;
         }
     }
+
     return FAILURE_CODE;
 }
 
-handle_res_t check_success(success_t *success, const client_t *successor) {
-    if ((success->str_len < 1) && successor->bytes_read >= READ_LEN) {
-        u_char *buffer = successor->buffer;
-        uint16_t len_recv;
-        memcpy(&len_recv, &buffer[CONF_LEN], LEN_LEN);
-        success->str_len = ntohs(len_recv);
-        if(success->str_len < 1) {
-            return FAILURE_RES;
-        }
-    }
-
-    if(success->str_len > 0) {
-        int all_read = READ_LEN + success->str_len;
-        if (successor->bytes_read >= all_read) {
-            successor->buffer[all_read] = '\0';
-            memcpy(success->answer, &successor->buffer[READ_LEN], success->str_len + 1);;
-            return SUCCESS_RES;
-        }
-    }
-
-    return UNFINISHED;
-}
 
 void set_uuid(client_t *client, const u_char *client_uuid) {
     memcpy(client->uuid, client_uuid, UUID_LEN);
     client->got_uuid = TRUE;
-}
-
-void print_uuid(const u_char *client_uuid) {
-    printf("UUID: ");
-    for(int i = 0; i < 16; i+= 2) {
-        printf("%02x", client_uuid[i]);
-    }
-    printf("\n");
 }
 
 handle_res_t send_work(size_t msg_size, int socket_fd, client_t *cur_client) {
@@ -247,7 +242,6 @@ handle_res_t send_work(size_t msg_size, int socket_fd, client_t *cur_client) {
     if(result == FAILURE_CODE) {
         return FAILURE_RES;
     }
-    ///write(0, cur_client->buffer, msg_size);
 
     cur_client->state = TO_ACK;
     cur_client->bytes_read = 0;

@@ -1,144 +1,245 @@
+#include <sys/socket.h>
 #include "server.h"
-#include "sock_polls.h"
-#include "success.h"
+#include "../agreements.h"
+#include "sock_polls/sock_polls.h"
+#include "../utils/sock_utils.h"
 
 void run_server(const char *hash, uint16_t port) {
-    int server_socket_fd = server_socket(port);
+    server_t *server = malloc(sizeof(server_t));
+    init_server(server, hash, port);
 
-    if (server_socket_fd == FAILURE_CODE) {
-        exit(EXIT_FAILURE);
+    while (running(server)) {
+        server_poll(server);
+        check_tasks(server->task_manager, 0);
+        if (check_accept(server) == FAILURE_RES) {
+            exit(EXIT_FAILURE);
+        }
+        check_all_clients(server);
     }
 
-    task_manager_t task_manager;
-    init_task_manager(&task_manager, hash);
+    destroy_server(server);
+    free(server);
+}
 
-    struct pollfd *sock_polls;
-    init_sock_polls(&sock_polls, server_socket_fd);
+void check_all_clients(server_t *server) {
+    cur_clients_t *clients = server->cur_clients;
 
-    cur_clients_t cur_clients;
-    init_cur_clients(&cur_clients, sock_polls);
+    for (int client_num = 0; is_num_for_poll(server, client_num); ++client_num) {
+        server->cur_poll = &(clients->polls[client_num]);
+        server->cur_client = &(clients->clients[client_num]);
+        server->client_num = client_num;
 
-    success_t success;
-    init_success(&success);
+        check_one_client(server);
+    }
+}
 
-    int closing = FALSE;
+int is_num_for_poll(const server_t *server, int client_num) {
+    return (client_num < server->cur_clients->amount) && (server->events > 0);
+}
 
-    while (!closing || task_manager.tasks_going->amount > 0 || cur_clients.amount > 0) {
-        //printf("Closing is %d, tasks are %d, clients are %ld\n", closing, task_manager.tasks_list->amount, cur_clients.amount);
+void check_one_client(server_t *server) {
+    handle_res_t event_res = handle_event(server);
+    if (event_res != SUCCESS_RES) {
+        return;
+    }
 
-        int events = poll(sock_polls, cur_clients.amount + 1, TIMEOUT_MS);
+    handle_res_t handle_result = UNFINISHED;
 
-        fprintf(stderr, "Poll\n");
+    if (server->cur_client->state == UNKNOWN) {
+        handle_result = try_handle_unknown(server->cur_client);
+    }
 
-        check_tasks(&task_manager);
-
-        if (events == 0) {
-            fprintf(stderr, "Empty poll\n");
-            continue;
-        }
-
-        if (sock_polls[0].revents == POLLIN) {
-            --events;
-            fprintf(stderr, "Accepting client\n");
-            int client_fd = accept(server_socket_fd, NULL, NULL);
-            add_client(&cur_clients, client_fd);
-        }
-
-        for (int sock_num = 0; sock_num < cur_clients.amount && events > 0; ++sock_num) {
-            struct pollfd *cur_poll = &cur_clients.polls[sock_num];
-            if (cur_poll->revents == 0) {
-                continue;
-            }
-
-            --events;
-            if (cur_poll->revents != POLLIN) {
-                fprintf(stderr, "ERROR: removing client on poll\n");
-
-
-                remove_client(&cur_clients, sock_num);
-                continue;
-            }
-
-            client_t *cur_client = &(cur_clients.clients[sock_num]);
-
-            ssize_t read = recv(cur_poll->fd, cur_client->buffer, CLIENT_BUF_SIZE, 0);
-
-            if (read < 0) {
-                fprintf(stderr, "ERROR: removing client on read\n");
-                remove_client(&cur_clients, sock_num);
-
-                continue;
-            }
-
-            cur_client->bytes_read += read;
-
-            enum handle_res for_close = UNFINISHED;
-
-            if (cur_client->state == UNKNOWN) {
-                fprintf(stderr, "UNKNOWN\n");
-                for_close = try_handle_unknown(cur_client);
-            }
-
-            if(closing && (for_close == UNFINISHED)) {
-                for_close = try_handle_close(&task_manager, cur_poll->fd, cur_client);
-            }
-
-            switch (cur_client->state) {
-                case UNKNOWN:
-                    break;
-                case NEW: {
-                    for_close = try_handle_new(&task_manager, cur_poll->fd, cur_client);
-                }
-                    break;
-                case MORE: {
-                    //fprintf(stderr, "MORE\n");
-                    for_close = try_handle_more(&task_manager, cur_poll->fd, cur_client);
-                }
-                    break;
-                case SUCCESS: {
-                    //fprintf(stderr, "SUCCESS\n");
-                    for_close = try_handle_success(
-                            task_manager.tasks_going, sock_num, cur_client, &success);
-                    if(for_close == SUCCESS_RES) {
-                        send_done(cur_poll->fd, cur_client);
-                        remove_task(task_manager.tasks_going, cur_client->uuid);
-                        closing = TRUE;
-                    }
-                    if(for_close == FAILURE_RES) {
-                        cancel_success(&success);
-                    }
-                }
-                    break;
-                case TO_ACK: {
-                    fprintf(stderr, "ACK\n");
-                    for_close = try_handle_to_ack(cur_client);
-                }
-                    break;
-            }
-
-            cur_poll->revents = 0;
-            fprintf(stderr, "Now events are %d\n", cur_poll->events);
-
-            if (for_close != UNFINISHED) {
-                if(for_close == FAILURE_RES && cur_client->got_uuid) {
-                    int task_num = check_uuid(task_manager.tasks_going, cur_client);
-                    if(task_num != FAILURE_CODE) {
-                        move_task(task_manager.tasks_to_do, task_manager.tasks_going, task_num);
-                    }
-                }
-
-                fprintf(stderr, "Removing client\n");
-                remove_client(&cur_clients, sock_num);
-            }
+    if (handle_result == UNFINISHED) {
+        if (server->state == CLOSING) {
+            handle_result = try_handle_closing(server);
+        } else {
+            handle_result = try_handle_working(server);
         }
     }
 
+    server->cur_poll->revents = 0;
 
-    fprintf(stderr, "Finishing server\n");
-    close(server_socket_fd);
+    process_handle_result(server, handle_result);
+}
 
-    destroy_success(&success);
-    destroy_sock_polls(sock_polls);
-    destroy_task_manager(&task_manager);
-    destroy_cur_clients(&cur_clients);
+void server_poll(server_t *server) {
+    nfds_t poll_amount = server->cur_clients->amount + 1;
+    server->events = poll(server->sock_polls, poll_amount, TIMEOUT_MS);
+}
+
+handle_res_t handle_event(server_t *server) {
+    if (server->cur_poll->revents == 0) {
+        return UNFINISHED;
+    }
+
+    --(server->events);
+
+    if (server->cur_poll->revents != POLLIN) {
+        handle_client_failure(server);
+        return FAILURE_RES;
+    }
+
+    ssize_t read = recv(server->cur_poll->fd, server->cur_client->buffer, CLIENT_BUF_SIZE, 0);
+    if (read < 0) {
+        handle_client_failure(server);
+        return FAILURE_RES;
+    }
+
+    server->cur_client->bytes_read += read;
+    return SUCCESS_RES;
+}
+
+handle_res_t try_handle_working(server_t *server) {
+    switch (server->cur_client->state) {
+        case UNKNOWN:
+            break;
+        case NEW: {
+            return try_handle_new(server);
+        }
+        case MORE: {
+            return try_handle_more(server);
+        }
+        case SUCCESS: {
+            handle_res_t handle_result = try_handle_success(server);
+            if (handle_result == SUCCESS_RES) {
+                remove_task(server->task_manager->tasks_going, server->cur_client->uuid);
+                server->state = CLOSING;
+            }
+            if (handle_result == FAILURE_RES) {
+                cancel_success(server->success);
+            }
+            return handle_result;
+        }
+        case TO_ACK: {
+            return try_handle_to_ack(server->cur_client);
+        }
+    }
+}
+
+
+
+task_t *next_task(server_t *server) {
+    task_manager_t *task_manager = server->task_manager;
+    task_list_t *going = task_manager->tasks_going;
+
+    ushort task_num = get_task_num(going, server->cur_client->uuid);
+    if(task_num < going->amount) {
+        remove_task_by_num(going, task_num);
+    }
+
+    task_list_t *to_do = task_manager->tasks_to_do;
+    task_t *task;
+
+    if(to_do->amount > 0) {
+        task = to_do->tasks[to_do->amount - 1];
+        --to_do->amount;
+    } else {
+        if(server->state == LIMITED) {
+            return NULL;
+        }
+        str_gen_t *str_gen = task_manager->str_gen;
+        task = make_task(str_gen->begin_str, str_gen->end_str, server->cur_client->uuid);
+        if(next_str(str_gen) == FAILURE_CODE) {
+            task_manager->valid = FALSE;
+            server->state = LIMITED;
+        }
+
+    }
+
+    add_task(going, task);
+
+    return task;
+}
+
+
+void process_handle_result(server_t *server, handle_res_t handle_result) {
+    if (handle_result != UNFINISHED) {
+        if (handle_result == FAILURE_RES) {
+            move_task_if_got_uuid(NULL, NULL);
+        }
+        remove_client(server->cur_clients, server->client_num);
+    }
+}
+
+void handle_client_failure(server_t *server) {
+    move_task_if_got_uuid(server->task_manager, server->cur_client);
+    remove_client(server->cur_clients, server->client_num);
+}
+
+void move_task_if_got_uuid(task_manager_t *task_manager, client_t *cur_client) {
+    if (!cur_client->got_uuid) {
+        return;
+    }
+
+    int uuid_num = check_uuid(task_manager->tasks_going, cur_client);
+    if (uuid_num != FAILURE_CODE) {
+        move_task(task_manager->tasks_to_do, task_manager->tasks_going, uuid_num);
+    }
+}
+
+handle_res_t check_accept(server_t *server) {
+    short server_revents = server->sock_polls[0].revents;
+    if (server_revents == 0) {
+        return UNFINISHED;
+    }
+
+    --(server->events);
+    if (server_revents != POLLIN) {
+        return FAILURE_RES;
+    }
+
+    int client_fd = accept(server->sock_fd, NULL, NULL);
+    add_client(server->cur_clients, client_fd);
+
+    return SUCCESS_RES;
+}
+
+
+int init_server(server_t *server, const char *hash, uint16_t port) {
+    server->sock_fd = server_socket(port);
+
+    if (server->sock_fd == FAILURE_CODE) {
+        return FAILURE_CODE;
+    }
+
+    server->cur_clients = malloc(sizeof(cur_clients_t));
+    server->success = malloc(sizeof(success_t));
+    server->task_manager = malloc(sizeof(task_manager_t));
+
+    init_sock_polls(&server->sock_polls, server->sock_fd, 0);
+
+    init_cur_clients(server->cur_clients, server->sock_polls, 0);
+    init_success(server->success, 0);
+    init_task_manager(server->task_manager, hash);
+
+    return SUCCESS_CODE;
+}
+
+void destroy_server(server_t *server) {
+    close(server->sock_fd);
+
+    destroy_success(server->success);
+    destroy_task_manager(server->task_manager);
+    destroy_cur_clients(server->cur_clients);
+
+    destroy_sock_polls(server->sock_polls);
+
+    free(server->cur_clients);
+    free(server->success);
+    free(server->task_manager);
+}
+
+int running(server_t *server) {
+    ushort going_amount = server->task_manager->tasks_going->amount;
+    ushort to_do_amount = server->task_manager->tasks_to_do->amount;
+    nfds_t clients_amount = server->cur_clients->amount;
+
+    switch (server->state) {
+        case WORKING:
+            return TRUE;
+        case CLOSING:
+            return (going_amount > 0) || (clients_amount > 0);
+        case LIMITED:
+            return (to_do_amount > 0) || (going_amount > 0) || (clients_amount > 0);
+    }
 }

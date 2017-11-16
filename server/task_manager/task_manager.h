@@ -1,24 +1,20 @@
 #ifndef NET5_TASK_MAKER_H
 #define NET5_TASK_MAKER_H
 
-#include "../types.h"
-#include "str_gen.h"
-#include "task_list.h"
-
-#define MAX_CLIENTS 64
+#include "str_gen/i-str_gen.h"
+#include "task_list/task_list.h"
 
 typedef struct task_manager {
     task_list_t *tasks_to_do;
     task_list_t *tasks_going;
     str_gen_t *str_gen;
     const char *hash;
+    int valid;
 } task_manager_t;
 
-void init_task_manager(task_manager_t *task_maker, const char *hash);
+void init_task_manager(task_manager_t *task_manager, const char *hash);
 void destroy_task_manager(task_manager_t *task_maker);
 
-task_t *get_task(task_manager_t *tasks_manager, void *client_uuid);
-
-void check_tasks(const task_manager_t *task_manager);
+void check_tasks(const task_manager_t *task_manager, ushort sec_to_do);
 
 #endif //NET5_TASK_MAKER_H

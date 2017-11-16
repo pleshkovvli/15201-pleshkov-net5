@@ -9,9 +9,6 @@
 #define INVALID (-1)
 #define VALID 1
 
-#define MIN_WORD_LENGTH 1
-#define MAX_WORD_LENGTH 32
-
 typedef struct lengths {
     ushort min_length;
     ushort max_length;

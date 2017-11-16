@@ -1,9 +1,10 @@
 #ifndef NET5_TASK_LIST_H
 #define NET5_TASK_LIST_H
 
-#include "../types.h"
+#include "task.h"
+#include <uuid/uuid.h>
 
-#define MAX_TASKS 100
+#define MAX_TASKS 2048
 
 typedef struct task_list {
     task_t **tasks;
@@ -12,9 +13,6 @@ typedef struct task_list {
 
 void init_task_list(task_list_t *task_list);
 void destroy_task_list(task_list_t *task_list);
-
-task_t *make_task(const char *begin, const char *end, uuid_t uuid);
-void destroy_task(task_t *task);
 
 ushort get_task_num(task_list_t *task_list, const void *client_uuid);
 

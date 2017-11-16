@@ -1,11 +1,13 @@
 #include <stdlib.h>
 #include <memory.h>
 #include "str_gen.h"
-#include "../protocol.h"
-#include "../utils/memcpy_next.h"
+#include "../../../utils/memcpy_next.h"
+#include "../../../agreements.h"
 
-int init_str_gen(str_gen_t *str_gen, const char *abc) {
-    str_gen->cur_aff = malloc(sizeof(char) * (MAX_STR_LEN - SUF_LEN + 1));
+int init_str_gen(str_gen_t *str_gen, const char *abc, ushort max_str_len) {
+    str_gen->max_str_len = max_str_len;
+
+    str_gen->cur_aff = malloc(sizeof(char) * (max_str_len - SUF_LEN + 1));
     if (str_gen->cur_aff == NULL) {
         return FAILURE_CODE;
     }
@@ -32,7 +34,7 @@ int init_str_gen(str_gen_t *str_gen, const char *abc) {
         return FAILURE_CODE;
     }
 
-    str_gen->begin_str = malloc(sizeof(char) * (MAX_STR_LEN + 1));
+    str_gen->begin_str = malloc(sizeof(char) * (max_str_len + 1));
     if (str_gen->begin_str == NULL) {
         return FAILURE_CODE;
     }
@@ -40,7 +42,7 @@ int init_str_gen(str_gen_t *str_gen, const char *abc) {
     str_gen->begin_str[0] = str_gen->abc[0];
     str_gen->begin_str[1] = '\0';
 
-    str_gen->end_str = malloc(sizeof(char) * (MAX_STR_LEN + 1));
+    str_gen->end_str = malloc(sizeof(char) * (max_str_len + 1));
     if (str_gen->end_str == NULL) {
         return FAILURE_CODE;
     }
@@ -74,7 +76,7 @@ void destroy_str_gen(str_gen_t *str_gen) {
 
 void update_str(char *str, const char *aff, const char *suf);
 
-void next_str(str_gen_t *str_gen) {
+int next_str(str_gen_t *str_gen) {
     char *cur_aff = str_gen->cur_aff;
 
     if(cur_aff[0] == '\0') {
@@ -84,6 +86,9 @@ void next_str(str_gen_t *str_gen) {
         ushort length = (ushort) strlen(cur_aff);
         enum next_action add = next_string(str_gen, length, 0);
         if (add == ADD) {
+            if(strlen(str_gen->begin_str) == str_gen->max_str_len) {
+                return FAILURE_CODE;
+            }
             cur_aff[length] = str_gen->abc[0];
             cur_aff[length + 1] = '\0';
         }
@@ -91,6 +96,8 @@ void next_str(str_gen_t *str_gen) {
 
     update_str(str_gen->begin_str, str_gen->cur_aff, str_gen->suf_begin);
     update_str(str_gen->end_str, str_gen->cur_aff, str_gen->suf_end);
+
+    return SUCCESS_CODE;
 }
 
 void update_str(char *str, const char *aff, const char *suf) {

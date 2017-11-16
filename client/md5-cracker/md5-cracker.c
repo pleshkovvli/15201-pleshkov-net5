@@ -1,5 +1,6 @@
+#include <stdlib.h>
 #include "md5-cracker.h"
-#include "check_strings_inner.h"
+#include "md5-cracker-inner.h"
 
 int find_match_in(range_values_t *range_values) {
     lengths_t lengths;
@@ -142,17 +143,9 @@ int validate_and_get_limits(range_values_t *range_values, lengths_t *lengths) {
         return INVALID;
     }
 
-    if((min_length >= MIN_WORD_LENGTH) && (min_length <= MAX_WORD_LENGTH)) {
-        lengths->min_length = (ushort) min_length;
-    } else {
-        return INVALID;
-    }
+    lengths->min_length = (ushort) min_length;
 
-    if((max_length >= MIN_WORD_LENGTH) && (max_length <= MAX_WORD_LENGTH)) {
-        lengths->max_length = (ushort) max_length;
-    } else {
-        return INVALID;
-    }
+    lengths->max_length = (ushort) max_length;
 
     return VALID;
 }
@@ -189,4 +182,20 @@ ushort get_position(
 
     int continue_key_word = (strncmp(word, key_word, index) == 0);
     return continue_key_word ? reverse_table[key_word[index]] : default_value;
+}
+
+
+void init_range(range_values_t *range) {
+    range->alphabet = "ACGT";
+    range->word = malloc(32);
+    range->hash_to_break = malloc(MD5_DIGEST_LENGTH);
+    range->begin_word = malloc(32);
+    range->end_word = malloc(32);
+}
+
+void free_range(range_values_t *range) {
+    free(range->word);
+    free(range->hash_to_break);
+    free(range->begin_word);
+    free(range->end_word);
 }

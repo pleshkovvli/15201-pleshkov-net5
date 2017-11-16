@@ -15,4 +15,9 @@ typedef struct range_values_struct {
 
 int find_match_in(range_values_t *range_values);
 
+void init_range(range_values_t *range);
+
+void free_range(range_values_t *range);
+
+
 #endif //NET5_CHECK_STRINGS_H
