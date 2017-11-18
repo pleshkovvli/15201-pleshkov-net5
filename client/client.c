@@ -5,10 +5,10 @@
 #include <stdlib.h>
 #include <zconf.h>
 #include "client.h"
-#include "../utils/sock_utils.h"
+#include "../utils/include/sock_utils.h"
 #include "../agreements.h"
 #include "../protocol.h"
-#include "../utils/memcpy_next.h"
+#include "../utils/include/memcpy_next.h"
 
 static const char new_msg[] = NEW_MSG;
 static const char more_msg[] = MORE_MSG;
@@ -18,73 +18,92 @@ static const char ack_msg[] = ACK_MSG;
 static const char do_msg[] = DO_MSG;
 static const char done_msg[] = DONE_MSG;
 
-contact_res_t get_check_msg(int socket_fd, u_char *buffer, size_t *offset);
+void init_local_client(local_client_t *client, const char *ip, uint16_t port) {
+    client->ip = ip;
+    client->port = port;
 
-contact_res_t get_words(int socket_fd, u_char *buffer, size_t offset, range_values_t *range);
+    uuid_generate(client->uuid);
+    get_uuid_short(client->uuid_short, client->uuid);
 
-contact_res_t get_one_word(int socket_fd, u_char *buffer, size_t *offset, char *word);
+    client->sock_fd = -1;
+    client->buffer = malloc(BUF_SIZE);
 
-contact_res_t get_match_contact(int sock_fd, u_char *buffer, uuid_t uuid, range_values_t *range);
+    client->range = malloc(sizeof(range_values_t));
+    init_range(client->range);
 
-size_t fill_match_buf(u_char *buffer, uuid_t uuid, const range_values_t *range);
+    client->logger = malloc(sizeof(logger_t));
+    init_logger(client->logger, client->uuid_short, stderr);
+}
+
+void destroy_local_client(local_client_t *client) {
+    free(client->buffer);
+
+    free_range(client->range);
+    free(client->range);
+
+    free(client->logger);
+
+}
 
 int run_client(const char *ip, uint16_t port) {
-    uuid_t uuid = {};
-    uuid_generate(uuid);
+    local_client_t *client = malloc(sizeof(local_client_t));
+    init_local_client(client, ip, port);
 
-    int sock_fd;
-    u_char buffer[BUF_SIZE];
-
-    range_values_t range;
-    init_range(&range);
+    log_simple(client->logger, "Starting client: connecting with server first time");
 
     contact_res_t result;
-    do {
-        sock_fd = client_socket(ip, port);
-        result = get_new_contact(sock_fd, buffer, uuid, &range);
-        close(sock_fd);
-    } while (result == CON_FAILURE && (sleep(3) == 0));
+    result = try_contact(client, get_new_contact);
 
     if (result == CON_DONE) {
-        exit(EXIT_SUCCESS);
+        log_simple(client->logger, "Answer already have been found");
     }
 
     while (result == CON_DO) {
-        int match = find_match_in(&range);
+        log_simple(client->logger, "Looking for answer...");
+        int match = find_match_in(client->range);
         if (match == MATCH) {
-            do {
-                sock_fd = client_socket(ip, port);
-                result = get_match_contact(sock_fd, buffer, uuid, &range);
-                close(sock_fd);
-            } while (result == CON_FAILURE && (sleep(3) == 0));
-            break;
+            log_simple(client->logger, "Answer found!");
+            result = try_contact(client, get_match_contact);
+        } else {
+            log_simple(client->logger, "Answer not found: asking more");
+            result = try_contact(client, get_more_contact);
         }
-
-        do {
-            sock_fd = client_socket(ip, port);
-            result = get_more_contact(sock_fd, buffer, uuid, &range);
-            close(sock_fd);
-        } while (result == CON_FAILURE && (sleep(3) == 0));
     }
 
-    if (result == CON_DONE) {
-        exit(EXIT_SUCCESS);
-    }
-
-    free_range(&range);
+    log_simple(client->logger, "Finishing client");
+    destroy_local_client(client);
 }
 
-contact_res_t get_match_contact(int sock_fd, u_char *buffer, uuid_t uuid, range_values_t *range) {
-    size_t written = fill_match_buf(buffer, uuid, range);
+contact_res_t try_contact(local_client_t *client, contact_res_t (*contact_fun)(local_client_t *)) {
+    contact_res_t result = CON_FAILURE;
 
-    int result = send_all(sock_fd, buffer, 0, written);
+    do {
+        log_simple(client->logger, "Connecting to server");
+        client->sock_fd = client_socket(client->ip, client->port);
+        if(client->sock_fd >= 0) {
+            log_simple(client->logger, "Contacting with server");
+
+            result = contact_fun(client);
+            close(client->sock_fd);
+        } else {
+            log_simple(client->logger, "Failed to connect to server");
+        }
+    } while (result == CON_FAILURE && (sleep(3) == 0));
+
+    return result;
+}
+
+contact_res_t get_match_contact(local_client_t *client) {
+    size_t written = fill_match_buf(client->buffer, client->uuid, client->range);
+
+    int result = send_all(client->sock_fd, client->buffer, 0, written);
     if (result == FAILURE_CODE) {
         return CON_FAILURE;
     }
 
     size_t offset = 0;
-    result = recv_all_next(buffer, sock_fd, MSG_LEN, &offset);
-    if (result == FAILURE_CODE || memcmp(buffer, done_msg, MSG_LEN) != 0) {
+    result = recv_all_next(client->buffer, client->sock_fd, MSG_LEN, &offset);
+    if (result == FAILURE_CODE || memcmp(client->buffer, done_msg, MSG_LEN) != 0) {
         return CON_FAILURE;
     }
 
@@ -103,33 +122,33 @@ size_t fill_match_buf(u_char *buffer, uuid_t uuid, const range_values_t *range) 
     return written;
 }
 
-contact_res_t get_new_contact(int socket_fd, u_char *buffer, uuid_t uuid, range_values_t *range) {
+contact_res_t get_new_contact(local_client_t *client) {
     size_t offset = 0;
 
-    fill_conf_buf(buffer, new_msg, uuid);
-    contact_res_t con_result = get_check_msg(socket_fd, buffer, &offset);
+    fill_conf_buf(client->buffer, new_msg, client->uuid);
+    contact_res_t con_result = get_check_msg(client->sock_fd, client->buffer, &offset);
     if (con_result != CON_DO) {
         return con_result;
     }
 
-    int res = get_hash(socket_fd, buffer, &offset);
+    int res = get_hash(client->sock_fd, client->buffer, &offset);
     if (res == FAILURE_CODE) {
         return CON_DONE;
     }
 
-    return get_words(socket_fd, buffer, offset, range);
+    return get_words(client->sock_fd, client->buffer, offset, client->range);
 }
 
-contact_res_t get_more_contact(int socket_fd, u_char *buffer, uuid_t uuid, range_values_t *range) {
+contact_res_t get_more_contact(local_client_t *client) {
     size_t offset = 0;
 
-    fill_conf_buf(buffer, more_msg, uuid);
-    contact_res_t con_result = get_check_msg(socket_fd, buffer, &offset);
+    fill_conf_buf(client->buffer, more_msg, client->uuid);
+    contact_res_t con_result = get_check_msg(client->sock_fd, client->buffer, &offset);
     if (con_result != CON_DO) {
         return con_result;
     }
 
-    return get_words(socket_fd, buffer, offset, range);
+    return get_words(client->sock_fd, client->buffer, offset, client->range);
 }
 
 
@@ -195,7 +214,7 @@ contact_res_t get_check_msg(int socket_fd, u_char *buffer, size_t *offset) {
     return CON_FAILURE;
 }
 
-int get_hash(int socket_fd, const void *buffer, size_t *offset) {
+int get_hash(int socket_fd, u_char *buffer, size_t *offset) {
     int result = recv_all_next(buffer, socket_fd, MD5_DIGEST_LENGTH, offset);
 
     if (result == FAILURE_CODE) {

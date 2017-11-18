@@ -6,7 +6,6 @@
 
 typedef struct success {
     int happened;
-    int num;
     ushort str_len;
     u_char *answer;
 } success_t;

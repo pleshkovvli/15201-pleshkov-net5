@@ -4,8 +4,6 @@
 #include "cur_clients/client_type.h"
 #include "server.h"
 
-typedef enum handle_res {SUCCESS_RES, FAILURE_RES, UNFINISHED} handle_res_t;
-
 handle_res_t try_handle_unknown(client_t *cur_client);
 
 handle_res_t try_handle_to_ack(const client_t *cur_client);

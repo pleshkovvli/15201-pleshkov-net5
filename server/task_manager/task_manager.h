@@ -9,10 +9,9 @@ typedef struct task_manager {
     task_list_t *tasks_going;
     str_gen_t *str_gen;
     const char *hash;
-    int valid;
 } task_manager_t;
 
-void init_task_manager(task_manager_t *task_manager, const char *hash);
+void init_task_manager(task_manager_t *task_manager, const char *hash, ushort max_str_len, const char *abc);
 void destroy_task_manager(task_manager_t *task_maker);
 
 void check_tasks(const task_manager_t *task_manager, ushort sec_to_do);

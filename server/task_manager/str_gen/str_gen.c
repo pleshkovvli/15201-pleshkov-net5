@@ -1,7 +1,7 @@
 #include <stdlib.h>
 #include <memory.h>
 #include "str_gen.h"
-#include "../../../utils/memcpy_next.h"
+#include "../../../utils/include/memcpy_next.h"
 #include "../../../agreements.h"
 
 int init_str_gen(str_gen_t *str_gen, const char *abc, ushort max_str_len) {

@@ -5,8 +5,8 @@
 #include "cur_clients/client_type.h"
 #include "handlers.h"
 #include "../agreements.h"
-#include "../utils/sock_utils.h"
-#include "../utils/memcpy_next.h"
+#include "../utils/include/sock_utils.h"
+#include "../utils/include/memcpy_next.h"
 
 static char new_msg[] = NEW_MSG;
 static char more_msg[] = MORE_MSG;
@@ -60,7 +60,6 @@ handle_res_t try_handle_success(server_t *server) {
     handle_res_t result = check_set_uuid(server->task_manager->tasks_going, server->cur_client);
     if (result == SUCCESS_RES) {
         server->success->happened = TRUE;
-        server->success->num = server->client_num;
     } else {
         return FAILURE_RES;
     }

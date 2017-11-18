@@ -19,5 +19,4 @@ void init_range(range_values_t *range);
 
 void free_range(range_values_t *range);
 
-
 #endif //NET5_CHECK_STRINGS_H

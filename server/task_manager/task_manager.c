@@ -1,10 +1,15 @@
 #include <stdlib.h>
 #include "task_manager.h"
 #include "../../agreements.h"
+#include "../../utils/include/logger.h"
 
-void init_task_manager(task_manager_t *task_manager, const char *hash) {
+void init_task_manager(
+        task_manager_t *task_manager,
+        const char *hash,
+        ushort max_str_len,
+        const char *abc
+) {
     task_manager->hash = hash;
-    task_manager->valid = TRUE;
 
     task_manager->tasks_to_do = malloc(sizeof(task_list_t));
     init_task_list(task_manager->tasks_to_do);
@@ -13,7 +18,7 @@ void init_task_manager(task_manager_t *task_manager, const char *hash) {
     init_task_list(task_manager->tasks_going);
 
     task_manager->str_gen = malloc(sizeof(str_gen_t));
-    init_str_gen(task_manager->str_gen, "ACGT", 0);
+    init_str_gen(task_manager->str_gen, abc, max_str_len);
 }
 
 void destroy_task_manager(task_manager_t *task_maker) {

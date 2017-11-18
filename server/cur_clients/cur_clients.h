@@ -1,8 +1,8 @@
 #ifndef NET5_SERVER_HANDLING_H
 #define NET5_SERVER_HANDLING_H
 
-#include "../../types.h"
 #include "client_type.h"
+#include <poll.h>
 
 typedef struct cur_clients {
     struct pollfd *polls;

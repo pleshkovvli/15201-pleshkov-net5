@@ -3,8 +3,9 @@
 #include <netinet/in.h>
 #include <memory.h>
 #include <arpa/inet.h>
-#include "sock_utils.h"
-#include "../agreements.h"
+#include <stdlib.h>
+#include "../include/sock_utils.h"
+#include "../../agreements.h"
 
 int recv_all_next(u_char *buffer, int socket_fd, size_t length, size_t *offset) {
     size_t read_bytes = 0;
@@ -19,6 +20,22 @@ int recv_all_next(u_char *buffer, int socket_fd, size_t length, size_t *offset) 
 
     *offset += length;
     return SUCCESS_CODE;
+}
+
+
+uint16_t get_port(const char *port_string) {
+    char *check;
+    long port = strtol(port_string, &check, 10);
+    if(*check != '\0') {
+        printf("%s is not valid port number\n", port_string);
+        return 0;
+    }
+    if(port < 1 || port > 65535) {
+        printf("Port %ld is out range\n", port);
+        return 0;
+    }
+
+    return (uint16_t) port;
 }
 
 
