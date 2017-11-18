@@ -1,6 +1,5 @@
 #include <stdlib.h>
 #include "sock_polls.h"
-#include "../cur_clients/cur_clients.h"
 
 void init_sock_polls(struct pollfd **socket_polls, int server_socket_fd, uint max_clients) {
     *socket_polls = malloc(sizeof(struct pollfd) * (max_clients + 1));

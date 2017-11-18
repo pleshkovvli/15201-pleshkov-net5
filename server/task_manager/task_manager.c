@@ -1,7 +1,5 @@
 #include <stdlib.h>
 #include "task_manager.h"
-#include "../../agreements.h"
-#include "../../utils/include/logger.h"
 
 void init_task_manager(
         task_manager_t *task_manager,

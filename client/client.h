@@ -27,6 +27,9 @@ typedef struct local_client {
 
 contact_res_t try_contact(local_client_t *client, contact_res_t (*contact_fun)(local_client_t *));
 
+void init_local_client(local_client_t *client, const char *ip, uint16_t port);
+
+void destroy_local_client(local_client_t *client);
 
 int run_client(const char *ip, uint16_t port);
 

@@ -18,6 +18,40 @@ static const char ack_msg[] = ACK_MSG;
 static const char do_msg[] = DO_MSG;
 static const char done_msg[] = DONE_MSG;
 
+int run_client(const char *ip, uint16_t port) {
+    local_client_t *client = malloc(sizeof(local_client_t));
+    init_local_client(client, ip, port);
+
+    printf("UUID: ");
+    print_uuid(client->uuid);
+    printf("\n");
+
+    log_simple(client->logger, "Starting client: connecting with server first time");
+
+    contact_res_t result;
+    result = try_contact(client, get_new_contact);
+
+    if (result == CON_DONE) {
+        log_simple(client->logger, "Answer already have been found");
+    }
+
+    while (result == CON_DO) {
+        log_simple(client->logger, "Looking for answer...");
+        int match = find_match_in(client->range);
+        if (match == MATCH) {
+            log_simple(client->logger, "Answer found!");
+            result = try_contact(client, get_match_contact);
+        } else {
+            log_simple(client->logger, "Answer not found: asking more");
+            result = try_contact(client, get_more_contact);
+        }
+    }
+
+    log_simple(client->logger, "Finishing client");
+    destroy_local_client(client);
+}
+
+
 void init_local_client(local_client_t *client, const char *ip, uint16_t port) {
     client->ip = ip;
     client->port = port;
@@ -45,34 +79,6 @@ void destroy_local_client(local_client_t *client) {
 
 }
 
-int run_client(const char *ip, uint16_t port) {
-    local_client_t *client = malloc(sizeof(local_client_t));
-    init_local_client(client, ip, port);
-
-    log_simple(client->logger, "Starting client: connecting with server first time");
-
-    contact_res_t result;
-    result = try_contact(client, get_new_contact);
-
-    if (result == CON_DONE) {
-        log_simple(client->logger, "Answer already have been found");
-    }
-
-    while (result == CON_DO) {
-        log_simple(client->logger, "Looking for answer...");
-        int match = find_match_in(client->range);
-        if (match == MATCH) {
-            log_simple(client->logger, "Answer found!");
-            result = try_contact(client, get_match_contact);
-        } else {
-            log_simple(client->logger, "Answer not found: asking more");
-            result = try_contact(client, get_more_contact);
-        }
-    }
-
-    log_simple(client->logger, "Finishing client");
-    destroy_local_client(client);
-}
 
 contact_res_t try_contact(local_client_t *client, contact_res_t (*contact_fun)(local_client_t *)) {
     contact_res_t result = CON_FAILURE;
