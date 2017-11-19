@@ -22,9 +22,9 @@ int run_client(const char *ip, uint16_t port) {
     local_client_t *client = malloc(sizeof(local_client_t));
     init_local_client(client, ip, port);
 
-    printf("UUID: ");
-    print_uuid(client->uuid);
-    printf("\n");
+    fprintf(stderr, "UUID: ");
+    print_uuid(client->uuid, stderr);
+    fprintf(stderr, "\n");
 
     log_simple(client->logger, "Starting client: connecting with server first time");
 
@@ -36,10 +36,12 @@ int run_client(const char *ip, uint16_t port) {
     }
 
     while (result == CON_DO) {
-        log_simple(client->logger, "Looking for answer...");
-        int match = find_match_in(client->range);
+        range_values_t *range = client->range;
+        fprintf(stderr, "Looking for answer in %s --- %s\n", range->begin_word, range->end_word);
+        int match = find_match_in(range);
         if (match == MATCH) {
             log_simple(client->logger, "Answer found!");
+            fprintf(stderr, "%s\n", range->word);
             result = try_contact(client, get_match_contact);
         } else {
             log_simple(client->logger, "Answer not found: asking more");
@@ -113,6 +115,10 @@ contact_res_t get_match_contact(local_client_t *client) {
         return CON_FAILURE;
     }
 
+    send_all(client->sock_fd, ack_msg, 0, MSG_LEN);
+    recv(client->sock_fd, client->buffer, 1, 0);
+
+    return CON_DONE;
 }
 
 size_t fill_match_buf(u_char *buffer, uuid_t uuid, const range_values_t *range) {
@@ -139,10 +145,20 @@ contact_res_t get_new_contact(local_client_t *client) {
 
     int res = get_hash(client->sock_fd, client->buffer, &offset);
     if (res == FAILURE_CODE) {
-        return CON_DONE;
+        return CON_FAILURE;
     }
 
-    return get_words(client->sock_fd, client->buffer, offset, client->range);
+    memcpy(client->range->hash_to_break, &client->buffer[MSG_LEN], MD5_DIGEST_LENGTH);
+
+    con_result = get_words(client->sock_fd, client->buffer, offset, client->range);
+    if (con_result != CON_DO) {
+        return con_result;
+    }
+
+    send_all(client->sock_fd, ack_msg, 0, MSG_LEN);
+    recv(client->sock_fd, client->buffer, 1, 0);
+
+    return con_result;
 }
 
 contact_res_t get_more_contact(local_client_t *client) {
@@ -154,7 +170,15 @@ contact_res_t get_more_contact(local_client_t *client) {
         return con_result;
     }
 
-    return get_words(client->sock_fd, client->buffer, offset, client->range);
+    con_result = get_words(client->sock_fd, client->buffer, offset, client->range);
+    if (con_result != CON_DO) {
+        return con_result;
+    }
+
+    send_all(client->sock_fd, ack_msg, 0, MSG_LEN);
+    recv(client->sock_fd, client->buffer, 1, 0);
+
+    return con_result;
 }
 
 

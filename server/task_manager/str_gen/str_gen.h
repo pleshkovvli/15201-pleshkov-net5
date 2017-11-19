@@ -3,7 +3,7 @@
 
 #include "i-str_gen.h"
 
-#define SUF_LEN 9
+#define SUF_LEN 12
 
 enum next_action {
     ADD, NOT_ADD

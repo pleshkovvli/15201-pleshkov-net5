@@ -7,6 +7,7 @@
 #include "../agreements.h"
 #include "../utils/include/sock_utils.h"
 #include "../utils/include/memcpy_next.h"
+#include "../utils/include/print_uuid.h"
 
 static char new_msg[] = NEW_MSG;
 static char more_msg[] = MORE_MSG;
@@ -49,44 +50,59 @@ handle_res_t handle_to_ack(void *buffer) {
 }
 
 handle_res_t try_handle_success(server_t *server) {
-    if(server->success->happened) {
-        return FAILURE_RES;
-    }
-
     if (server->cur_client->bytes_read < CONF_LEN) {
         return UNFINISHED;
     }
 
     handle_res_t result = check_set_uuid(server->task_manager->tasks_going, server->cur_client);
     if (result == SUCCESS_RES) {
-        server->success->happened = TRUE;
+        log_simple(server->logger, "Success UUID check confirmed");
     } else {
+        log_simple(server->logger, "Success UUID check FAILED!!!");
         return FAILURE_RES;
+    }
+
+    if(server->success->happened) {
+        log_simple(server->logger, "Success again!");
+
+        remove_task(server->task_manager->tasks_going, server->cur_client->uuid);
+
+        return send_done(server);
     }
 
     handle_res_t process_res = process_success(server->success, server->cur_client);
 
-    if(process_res == SUCCESS_CODE) {
-        send_done(server);
+    if(process_res == FAILURE_RES) {
+        log_simple(server->logger, "Success failed!");
+
+        cancel_success(server->success);
+        server->state = WORKING;
+    } else if(process_res == SUCCESS_RES) {
+        log_simple(server->logger, "Success confirmed!");
+
+        remove_task(server->task_manager->tasks_going, server->cur_client->uuid);
+        server->state = CLOSING;
+
+        process_res = send_done(server);
     }
 
     return process_res;
 }
 
 handle_res_t check_set_uuid(const task_list_t *tasks, client_t *cur_client) {
+    u_char *uuid = &cur_client->buffer[MSG_LEN];
+    set_uuid(cur_client, uuid);
+
     int check_res = check_uuid(tasks, cur_client);
 
     if (check_res == FAILURE_CODE) {
         return FAILURE_RES;
     }
 
-    u_char *uuid = &cur_client->buffer[MSG_LEN];
-    set_uuid(cur_client, uuid);
-
     return SUCCESS_RES;
 }
 
-handle_res_t process_success(success_t *success, const client_t *successor) {
+handle_res_t process_success(success_t *success, client_t *successor) {
     if ((success->str_len < 1) && successor->bytes_read >= READ_LEN) {
         u_char *buffer = successor->buffer;
         
@@ -103,7 +119,9 @@ handle_res_t process_success(success_t *success, const client_t *successor) {
         int all_read = READ_LEN + success->str_len;
         if (successor->bytes_read >= all_read) {
             successor->buffer[all_read] = '\0';
-            memcpy(success->answer, &successor->buffer[READ_LEN], success->str_len + 1);;
+            memcpy(success->answer, &successor->buffer[READ_LEN], success->str_len + 1);
+
+            success->happened = TRUE;
             return SUCCESS_RES;
         }
     }
@@ -123,7 +141,7 @@ handle_res_t try_handle_more(server_t *server) {
 handle_res_t handle_more(server_t *server) {
     client_t *client = server->cur_client;
 
-    int result = check_set_uuid(server->task_manager->tasks_to_do, client);
+    int result = check_set_uuid(server->task_manager->tasks_going, client);
     if(result == FAILURE_RES) {
         return FAILURE_RES;
 
@@ -153,7 +171,7 @@ handle_res_t handle_new(server_t *server) {
     
     u_char *uuid = &client->buffer[MSG_LEN];
     set_uuid(client, uuid);
-    
+
     task_t *task = next_task(server);
     if(task == NULL) {
         return handle_closing(server);
@@ -176,14 +194,13 @@ handle_res_t try_handle_closing(server_t *server) {
 handle_res_t handle_closing(server_t *server) {
     client_t *client = server->cur_client;
     
-    int task_num = check_uuid(server->task_manager->tasks_going, client);
+    int task_num = check_set_uuid(server->task_manager->tasks_going, client);
 
     if (task_num == FAILURE_CODE) {
         return FAILURE_RES;
     }
 
-    u_char *uuid = &client->buffer[MSG_LEN];
-    set_uuid(client, uuid);
+    remove_task(server->task_manager->tasks_going, server->cur_client->uuid);
 
     return send_done(server);
 
@@ -219,8 +236,16 @@ handle_res_t try_handle_unknown(client_t *cur_client) {
     return UNFINISHED;
 }
 
-int check_uuid(const task_list_t *tasks, client_t *client) { ;
+int check_uuid(const task_list_t *tasks, client_t *client) {
+
+    fprintf(stderr, "\nCLIENT UUID CHECKED ");
+    print_uuid(client->uuid, stderr);
+    fprintf(stderr, "\n");
+
     for (int uuid_num = 0; uuid_num < tasks->amount; ++uuid_num) {
+        fprintf(stderr, "UUID CHECKED ");
+        print_uuid(tasks->tasks[uuid_num]->uuid, stderr);
+        fprintf(stderr, "\n");
         if (memcmp(tasks->tasks[uuid_num]->uuid, client->uuid, UUID_LEN) == 0) {
             return uuid_num;
         }
@@ -232,6 +257,11 @@ int check_uuid(const task_list_t *tasks, client_t *client) { ;
 
 void set_uuid(client_t *client, const u_char *client_uuid) {
     memcpy(client->uuid, client_uuid, UUID_LEN);
+
+    fprintf(stderr, "\nSetting UUID: ");
+    print_uuid(client->uuid, stderr);
+    fprintf(stderr, "\n");
+
     client->got_uuid = TRUE;
 }
 

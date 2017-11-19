@@ -9,7 +9,7 @@
 #include "../utils/include/logger.h"
 
 #define TIMEOUT_MS 3000
-#define TASK_TIMEOUT_SEC 10
+#define TASK_TIMEOUT_SEC 40
 
 typedef enum server_state {WORKING, CLOSING, LIMITED} server_state_t;
 typedef enum handle_res {SUCCESS_RES, FAILURE_RES, UNFINISHED} handle_res_t;

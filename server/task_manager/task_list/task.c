@@ -31,6 +31,8 @@ task_t *make_task(const char *begin, const char *end, uuid_t uuid) {
 
     memcpy(task->uuid, uuid, UUID_SIZE);
 
+    task->timestamp = time(NULL);
+
     return task;
 }
 

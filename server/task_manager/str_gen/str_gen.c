@@ -8,52 +8,25 @@ int init_str_gen(str_gen_t *str_gen, const char *abc, ushort max_str_len) {
     str_gen->max_str_len = max_str_len;
 
     str_gen->cur_aff = malloc(sizeof(char) * (max_str_len - SUF_LEN + 1));
-    if (str_gen->cur_aff == NULL) {
-        return FAILURE_CODE;
-    }
-
     str_gen->cur_aff[0] = '\0';
     
     str_gen->abc_len = (ushort) strlen(abc);
     ushort abc_len = str_gen->abc_len;
 
     str_gen->abc = malloc(abc_len + 1);
-    if (str_gen->abc == NULL) {
-        return FAILURE_CODE;
-    }
-
     strncpy(str_gen->abc, abc, abc_len + 1);
 
     str_gen->suf_begin = make_suf(str_gen->abc[0], SUF_LEN);
-    if (str_gen->suf_begin == NULL) {
-        return FAILURE_CODE;
-    }
-
     str_gen->suf_end = make_suf(str_gen->abc[abc_len - 1], SUF_LEN);
-    if (str_gen->suf_end == NULL) {
-        return FAILURE_CODE;
-    }
 
     str_gen->begin_str = malloc(sizeof(char) * (max_str_len + 1));
-    if (str_gen->begin_str == NULL) {
-        return FAILURE_CODE;
-    }
-
     str_gen->begin_str[0] = str_gen->abc[0];
     str_gen->begin_str[1] = '\0';
 
     str_gen->end_str = malloc(sizeof(char) * (max_str_len + 1));
-    if (str_gen->end_str == NULL) {
-        return FAILURE_CODE;
-    }
-
     strncpy(str_gen->end_str, str_gen->suf_end, SUF_LEN + 1);
 
     str_gen->char_pos = malloc(sizeof(ushort) * 256);
-    if (str_gen->char_pos == NULL) {
-        return FAILURE_CODE;
-    }
-
     for (ushort i = 0; i < abc_len; ++i) {
         str_gen->char_pos[(u_char) str_gen->abc[i]] = i;
     }
@@ -86,9 +59,6 @@ int next_str(str_gen_t *str_gen) {
         ushort length = (ushort) strlen(cur_aff);
         enum next_action add = next_string(str_gen, length, 0);
         if (add == ADD) {
-            if(strlen(str_gen->begin_str) == str_gen->max_str_len) {
-                return FAILURE_CODE;
-            }
             cur_aff[length] = str_gen->abc[0];
             cur_aff[length + 1] = '\0';
         }
@@ -96,6 +66,10 @@ int next_str(str_gen_t *str_gen) {
 
     update_str(str_gen->begin_str, str_gen->cur_aff, str_gen->suf_begin);
     update_str(str_gen->end_str, str_gen->cur_aff, str_gen->suf_end);
+
+    if(strlen(str_gen->begin_str) > str_gen->max_str_len) {
+        return FAILURE_CODE;
+    }
 
     return SUCCESS_CODE;
 }

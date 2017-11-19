@@ -2,9 +2,9 @@
 #include "../include/print_uuid.h"
 #include "../../agreements.h"
 
-void print_uuid(const u_char *uuid) {
+void print_uuid(const u_char *uuid, FILE* stream) {
     for(int i = 0; i < UUID_SIZE; ++i) {
-        printf("%02x", uuid[i]);
+        fprintf(stream, "%02x", uuid[i]);
     }
 }
 

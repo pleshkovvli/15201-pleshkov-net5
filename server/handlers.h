@@ -26,7 +26,7 @@ handle_res_t check_set_uuid(const task_list_t *tasks, client_t *cur_client);
 
 handle_res_t handle_closing(server_t *server);
 
-handle_res_t process_success(success_t *success, const client_t *successor);
+handle_res_t process_success(success_t *success, client_t *successor);
 
 handle_res_t send_done(server_t *server);
 
